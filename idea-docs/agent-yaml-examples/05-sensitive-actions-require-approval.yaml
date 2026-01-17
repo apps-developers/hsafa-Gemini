@@ -1,0 +1,76 @@
+version: "1.0"
+
+agent:
+  name: sensitive-actions
+  description: Operations assistant that drafts actions and requires approval for sensitive tools.
+  system: |
+    You are an operations assistant.
+    You may draft actions, but do not execute sensitive actions unless approved.
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.2
+  maxOutputTokens: 1200
+
+loop:
+  maxSteps: 12
+  toolChoice: auto
+
+policies:
+  toolApproval:
+    mode: required
+    toolIds:
+      - send_email
+      - charge_customer
+
+tools:
+  - id: send_email
+    type: http
+    description: Send an email to a customer.
+    inputSchema:
+      type: object
+      properties:
+        to:
+          type: string
+        subject:
+          type: string
+        body:
+          type: string
+      required: [to, subject, body]
+    http:
+      method: POST
+      url: https://api.example.com/ops/email/send
+      headers:
+        Authorization: Bearer ${env.OPS_TOKEN}
+      body:
+        to: ${input.to}
+        subject: ${input.subject}
+        body: ${input.body}
+
+  - id: charge_customer
+    type: http
+    description: Charge a customer (requires approval).
+    inputSchema:
+      type: object
+      properties:
+        customerId:
+          type: string
+        amountCents:
+          type: number
+        currency:
+          type: string
+      required: [customerId, amountCents]
+    http:
+      method: POST
+      url: https://api.example.com/billing/charge
+      headers:
+        Authorization: Bearer ${env.BILLING_TOKEN}
+      body:
+        customerId: ${input.customerId}
+        amountCents: ${input.amountCents}
+        currency: ${input.currency}
+
+runtime:
+  response:
+    type: ui-message-stream

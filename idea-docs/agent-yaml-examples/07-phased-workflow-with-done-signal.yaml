@@ -1,0 +1,109 @@
+version: "1.0"
+agent:
+  name: phased-workflow
+  description: Multi-step workflow (search -> analyze -> finalize via done).
+  system: |
+    You are an analysis agent.
+    Follow the workflow:
+    1) search
+    2) analyze
+    3) finalize by calling done
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.3
+  maxOutputTokens: 1400
+
+loop:
+  maxSteps: 12
+  toolChoice: auto
+  phases:
+    - name: search
+      stepRange: [0, 2]
+      activeTools: [web_search]
+      toolChoice: required
+    - name: analyze
+      stepRange: [3, 7]
+      activeTools: [extract_facts, compute]
+      toolChoice: auto
+    - name: finalize
+      stepRange: [8, 11]
+      activeTools: [done]
+      toolChoice: required
+
+tools:
+  - id: web_search
+    type: http
+    description: Search the web.
+    inputSchema:
+      type: object
+      properties:
+        query:
+          type: string
+        limit:
+          type: number
+      required: [query]
+    http:
+      method: GET
+      url: https://api.example.com/search
+      query:
+        q: ${input.query}
+        limit: ${input.limit}
+      headers:
+        Authorization: Bearer ${env.SEARCH_TOKEN}
+
+  - id: extract_facts
+    type: inline_js
+    description: Extract key facts from a text snippet.
+    inputSchema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    runtime:
+      sandbox: true
+      timeoutMs: 1500
+    execute: |
+      export default async function execute({ text }) {
+        const t = String(text);
+        const lines = t.split(/\n+/).map(s => s.trim()).filter(Boolean);
+        return { facts: lines.slice(0, 10) };
+      }
+
+  - id: compute
+    type: inline_js
+    description: Evaluate a simple arithmetic expression.
+    inputSchema:
+      type: object
+      properties:
+        expression:
+          type: string
+      required: [expression]
+    runtime:
+      sandbox: true
+      timeoutMs: 1500
+    execute: |
+      export default async function execute({ expression }) {
+        const expr = String(expression);
+        if (!/^[0-9+\-*/().\s]+$/.test(expr)) {
+          throw new Error('Expression contains unsupported characters.');
+        }
+        const result = Function(`"use strict"; return (${expr});`)();
+        return { result };
+      }
+
+  - id: done
+    type: signal
+    description: Signal completion and provide the final answer.
+    inputSchema:
+      type: object
+      properties:
+        answer:
+          type: string
+      required: [answer]
+
+runtime:
+  response:
+    type: ui-message-stream

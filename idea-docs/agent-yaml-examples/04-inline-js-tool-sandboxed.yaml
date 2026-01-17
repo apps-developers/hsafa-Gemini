@@ -1,0 +1,73 @@
+version: "1.0"
+
+agent:
+  name: inline-js-sandboxed
+  description: Data-cleaning assistant with sandboxed inline JS tools.
+  system: |
+    You are a data-cleaning assistant.
+    If the user provides CSV text, you may use tools to clean it.
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.4
+  maxOutputTokens: 1200
+
+loop:
+  maxSteps: 10
+  toolChoice: auto
+
+tools:
+  - id: normalize_csv
+    type: inline_js
+    description: Normalize CSV text (trim whitespace, remove empty lines).
+    inputSchema:
+      type: object
+      properties:
+        csv:
+          type: string
+      required: [csv]
+    runtime:
+      sandbox: true
+      timeoutMs: 1500
+    execute: |
+      export default async function execute({ csv }) {
+        const lines = String(csv)
+          .split(/\r?\n/)
+          .map(l => l.trim())
+          .filter(Boolean);
+
+        return {
+          csv: lines.join('\n'),
+          lineCount: lines.length,
+        };
+      }
+
+  - id: summarize_table
+    type: inline_js
+    description: Summarize a CSV by reporting column count and first row.
+    inputSchema:
+      type: object
+      properties:
+        csv:
+          type: string
+      required: [csv]
+    runtime:
+      sandbox: true
+      timeoutMs: 1500
+    execute: |
+      export default async function execute({ csv }) {
+        const lines = String(csv).split(/\r?\n/).filter(Boolean);
+        const header = lines[0] ?? '';
+        const columns = header.split(',').map(s => s.trim()).filter(Boolean);
+
+        return {
+          columns,
+          columnCount: columns.length,
+          previewRow: lines[1] ?? null,
+        };
+      }
+
+runtime:
+  response:
+    type: ui-message-stream

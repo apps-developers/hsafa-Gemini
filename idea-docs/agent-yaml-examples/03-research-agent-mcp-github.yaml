@@ -1,0 +1,36 @@
+version: "1.0"
+
+agent:
+  name: research-agent-github
+  description: Researches a topic using GitHub MCP tools.
+  system: |
+    You are a research agent.
+    Use GitHub MCP tools to search issues and pull requests.
+    Cite the issue/PR numbers you used.
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.3
+  maxOutputTokens: 1200
+
+loop:
+  maxSteps: 15
+  toolChoice: auto
+
+mcp:
+  servers:
+    - name: github
+      url: ${env.GITHUB_MCP_URL}
+      transport: http
+      headers:
+        Authorization: Bearer ${env.GITHUB_TOKEN}
+      allowedTools:
+        - search_issues
+        - get_issue
+        - search_pull_requests
+        - get_pull_request
+
+runtime:
+  response:
+    type: ui-message-stream

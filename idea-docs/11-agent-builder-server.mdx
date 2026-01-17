@@ -1,0 +1,270 @@
+---
+title: YAML Agent Builder Server
+description: Design an API that builds ToolLoopAgent instances from YAML configs and streams responses.
+---
+
+# YAML Agent Builder Server
+
+This document describes an architecture for a **server-side “agent builder” API** that:
+
+- Accepts an **agent configuration in YAML** (model, instructions, tools, MCP servers, loop control)
+- Builds a **`ToolLoopAgent`** dynamically at request time
+- Runs the agent and returns the output as a **streaming response**
+- Streams **text + tool calls + tool results** (and optionally reasoning, depending on provider/model) in a format your client can render.
+
+The goal is to make agent creation **dynamic**, **composable**, and **safe enough for production**.
+
+## When this pattern makes sense
+
+Use a YAML-driven agent builder when you want:
+
+- **Runtime agent composition**
+  - e.g. “build a research agent for this tenant with these tools and these MCP connections”
+- **A single stable API surface**
+  - clients submit config + messages; the server handles orchestration
+- **A portable agent spec**
+  - configs can be stored in Git, a database, or a UI builder
+
+If you only have a small number of static agents, define them in TypeScript instead.
+
+## High-level request/response contract
+
+Your API route accepts JSON with (at minimum):
+
+- `agentYaml`: string (the YAML configuration)
+- `messages`: UI messages or model messages (your server chooses)
+
+And returns a **streaming response**.
+
+At a high level:
+
+1. Parse YAML
+2. Validate + normalize
+3. Build tools (inline + registry + MCP)
+4. Create a `ToolLoopAgent`
+5. Stream the agent execution to the client
+6. Cleanup (close MCP clients, release resources)
+
+## YAML shape (proposed)
+
+A good YAML spec is:
+
+- **Strictly versioned** (`version`)
+- **Declarative** (describes intent, not implementation)
+- **Validatable** (schema-driven)
+- **Safe by default** (dangerous capabilities require explicit enablement)
+
+Example:
+
+```yaml
+version: "1.0"
+
+agent:
+  name: support-agent
+  description: Answers support questions and can call tools.
+  system: |
+    You are a support agent.
+    - Be concise.
+    - If you use tools, explain what you’re doing.
+
+model:
+  provider: openai
+  name: gpt-4o-mini
+  temperature: 0.2
+  maxOutputTokens: 1200
+
+loop:
+  maxSteps: 10
+  toolChoice: auto
+
+tools:
+  - id: ticket_lookup
+    type: http
+    description: Lookup a ticket by id.
+    inputSchema:
+      type: object
+      properties:
+        id:
+          type: string
+      required: [id]
+    http:
+      method: POST
+      url: https://api.example.com/tickets/lookup
+      headers:
+        Authorization: Bearer ${env.TICKETS_TOKEN}
+
+  - id: summarize
+    type: inline_js
+    description: Summarize a long text into bullet points.
+    inputSchema:
+      type: object
+      properties:
+        text:
+          type: string
+      required: [text]
+    runtime:
+      sandbox: true
+      timeoutMs: 2000
+    execute: |
+      export default async function execute({ text }) {
+        return { bullets: String(text).split(/\n+/).slice(0, 5) };
+      }
+
+mcp:
+  servers:
+    - name: github
+      url: https://mcp.example.com/github
+      transport: http
+      headers:
+        Authorization: Bearer ${env.GITHUB_TOKEN}
+      allowedTools: [search_issues, get_issue]
+
+runtime:
+  response:
+    type: ui-message-stream
+```
+
+### Notes on the YAML design
+
+- The simplified format keeps the YAML easy to author while still mapping cleanly to `ToolLoopAgent`.
+- `agent.name` is useful for logging, caching, and client UI.
+- `model` should be **provider-agnostic** in YAML, but mapped to provider instances in server code.
+- `inputSchema` is shown as **JSON Schema-like** to keep YAML portable.
+- `${env.X}` indicates environment interpolation (recommended to avoid secrets in configs).
+
+## Tool sources
+
+A “dynamic agent builder” is mostly a **tool builder**.
+
+### Inline tools (JS code)
+
+Inline tool code unlocks maximum flexibility but is also the highest risk.
+
+<Note type="warning">
+  Executing tool code received from requests is equivalent to remote code
+  execution (RCE) unless you sandbox it. In production, treat this as a
+  dangerous capability and consider disabling it entirely.
+</Note>
+
+Recommended policy:
+
+- **Default: disabled** for untrusted callers
+- If enabled:
+  - Run in a **sandbox** (isolate filesystem/network/process)
+  - Enforce **timeouts** and **memory limits**
+  - Apply an **allowlist** of allowed imports/APIs
+  - Log everything (tool name, input, duration, errors)
+
+### Registry tools
+
+Instead of shipping code in YAML, you can refer to:
+
+- `type: registry`
+- `ref: tools.myTool@1.2.3`
+
+This gives you:
+
+- Code review and versioning
+- Stronger security posture
+- Better caching
+
+### MCP tools
+
+MCP is a good fit when you want tools owned by other services.
+
+Workflow:
+
+1. Create an MCP client from YAML transport settings
+2. Fetch tools from the MCP server (`discover` or `schemas` mode)
+3. Merge MCP tools into the agent’s toolset
+4. Close MCP clients when the stream finishes
+
+The AI SDK MCP docs cover best practices around transports and cleanup.
+
+## Streaming responses
+
+Your client already supports a rich streaming UI (text + reasoning + tool calls).
+
+On the server side, prefer streaming the **agent execution** rather than waiting for a final answer.
+
+Recommended approach:
+
+- Build a `ToolLoopAgent`
+- Return a UI streaming response using `createAgentUIStreamResponse()`
+
+This produces a stream that can include:
+
+- Text deltas
+- Tool call events
+- Tool result events
+- Step boundaries / metadata
+- Optional reasoning deltas (model/provider dependent)
+
+### Abort handling
+
+Forward the request abort signal so clients can stop generation cleanly.
+
+Also do cleanup on abort (close MCP clients, cancel fetches, etc.).
+
+## Validation + normalization
+
+Treat YAML as an **untrusted input format**, even if you control the caller.
+
+Recommended pipeline:
+
+- Parse YAML to a JS object
+- Validate against a schema
+- Normalize defaults (e.g. `loop.maxSteps`, `model.temperature`)
+- Enforce global constraints:
+  - Max tools
+  - Max steps
+  - Disallow certain tool types
+  - Require approval for “dangerous” tools
+
+## Execution policy (important)
+
+A dynamic agent builder needs an explicit stance on:
+
+- **Which tools are allowed**
+- **When tool calls require approval**
+- **Whether a tool may access network / filesystem**
+
+Common policies:
+
+- **Allowlist-only**: only tools from a known registry can run
+- **Tenant-scoped allowlists**: each tenant has a permitted tool + MCP list
+- **Approval required**: some tools can only run if the user explicitly approves
+
+## Operational concerns
+
+### Caching
+
+If you expect repeated configs, cache the “compiled” agent artifacts:
+
+- Parsed + validated config
+- Resolved tool definitions
+- Prepared MCP tool adapters (when applicable)
+
+### Observability
+
+At minimum, log:
+
+- Agent id + request id
+- Model/provider
+- Tool calls + durations + errors
+- Step count and finish reason
+
+### Secrets
+
+Do not allow secrets to be embedded directly in YAML.
+
+- Use environment interpolation (`${env.X}`)
+- Or use a server-side secret store keyed by tenant
+
+## Recommended next steps
+
+- Define the YAML schema formally (versioned)
+- Decide on a tool security model (registry-first vs inline)
+- Choose a streaming protocol that matches your client (UI message streams)
+- Implement a minimal end-to-end path:
+  - YAML -> validate -> build `ToolLoopAgent` -> stream response -> cleanup
