@@ -15,7 +15,6 @@ model:
 
 loop:
   maxSteps: 5
-  toolChoice: auto
 
 runtime:
   response:

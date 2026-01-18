@@ -78,7 +78,7 @@ loop:
   toolChoice: auto
 
 tools:
-  - id: ticket_lookup
+    - name: ticket_lookup
     type: http
     description: Lookup a ticket by id.
     inputSchema:
@@ -93,8 +93,8 @@ tools:
       headers:
         Authorization: Bearer ${env.TICKETS_TOKEN}
 
-  - id: summarize
-    type: inline_js
+    - name: summarize
+      type: inline-js
     description: Summarize a long text into bullet points.
     inputSchema:
       type: object
@@ -117,11 +117,11 @@ mcp:
       transport: http
       headers:
         Authorization: Bearer ${env.GITHUB_TOKEN}
-      allowedTools: [search_issues, get_issue]
-
-runtime:
-  response:
-    type: ui-message-stream
+        tools:
+          mode: discover
+          allow:
+            - search_issues
+            - get_issue
 ```
 
 ### Notes on the YAML design
