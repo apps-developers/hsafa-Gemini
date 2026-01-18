@@ -1,4 +1,3 @@
-import yaml from 'js-yaml';
 import { AgentConfigSchema, type AgentConfig } from './types';
 
 export class AgentConfigParseError extends Error {
@@ -10,10 +9,10 @@ export class AgentConfigParseError extends Error {
 
 export function parseAgentConfig(configString: string): AgentConfig {
   try {
-    const parsed = yaml.load(configString);
+    const parsed = JSON.parse(configString);
     
     if (!parsed || typeof parsed !== 'object') {
-      throw new AgentConfigParseError('Invalid YAML: expected an object');
+      throw new AgentConfigParseError('Invalid JSON: expected an object');
     }
 
     const validated = AgentConfigSchema.parse(parsed);
@@ -24,9 +23,9 @@ export function parseAgentConfig(configString: string): AgentConfig {
       throw error;
     }
     
-    if (error instanceof yaml.YAMLException) {
+    if (error instanceof SyntaxError) {
       throw new AgentConfigParseError(
-        `YAML parsing failed: ${error.message}`,
+        `JSON parsing failed: ${error.message}`,
         error
       );
     }

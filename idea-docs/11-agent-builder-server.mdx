@@ -1,13 +1,13 @@
 ---
-title: YAML Agent Builder Server
-description: Design an API that builds ToolLoopAgent instances from YAML configs and streams responses.
+title: JSON Agent Builder Server
+description: Design an API that builds ToolLoopAgent instances from JSON configs and streams responses.
 ---
 
-# YAML Agent Builder Server
+# JSON Agent Builder Server
 
-This document describes an architecture for a **server-side “agent builder” API** that:
+This document describes an architecture for a **server-side "agent builder" API** that:
 
-- Accepts an **agent configuration in YAML** (model, instructions, tools, MCP servers, loop control)
+- Accepts an **agent configuration in JSON** (model, instructions, tools, MCP servers, loop control)
 - Builds a **`ToolLoopAgent`** dynamically at request time
 - Runs the agent and returns the output as a **streaming response**
 - Streams **text + tool calls + tool results** (and optionally reasoning, depending on provider/model) in a format your client can render.
@@ -16,7 +16,7 @@ The goal is to make agent creation **dynamic**, **composable**, and **safe enoug
 
 ## When this pattern makes sense
 
-Use a YAML-driven agent builder when you want:
+Use a JSON-driven agent builder when you want:
 
 - **Runtime agent composition**
   - e.g. “build a research agent for this tenant with these tools and these MCP connections”
@@ -31,23 +31,23 @@ If you only have a small number of static agents, define them in TypeScript inst
 
 Your API route accepts JSON with (at minimum):
 
-- `agentConfig`: string (the configuration)
+- `agentConfig`: string (the JSON configuration)
 - `messages`: UI messages or model messages (your server chooses)
 
 And returns a **streaming response**.
 
 At a high level:
 
-1. Parse YAML
+1. Parse JSON
 2. Validate + normalize
 3. Build tools (inline + registry + MCP)
 4. Create a `ToolLoopAgent`
 5. Stream the agent execution to the client
 6. Cleanup (close MCP clients, release resources)
 
-## YAML shape (proposed)
+## JSON shape (proposed)
 
-A good YAML spec is:
+A good JSON spec is:
 
 - **Strictly versioned** (`version`)
 - **Declarative** (describes intent, not implementation)
@@ -56,108 +56,118 @@ A good YAML spec is:
 
 Example:
 
-```yaml
-version: "1.0"
-
-agent:
-  name: support-agent
-  description: Answers support questions and can call tools.
-  system: |
-    You are a support agent.
-    - Be concise.
-    - If you use tools, explain what you’re doing.
-
-model:
-  provider: openai
-  name: gpt-4o-mini
-  temperature: 0.2
-  maxOutputTokens: 1200
-
-loop:
-  maxSteps: 10
-  toolChoice: auto
-
-tools:
-    - name: ticket_lookup
-    type: http
-    description: Lookup a ticket by id.
-    inputSchema:
-      type: object
-      properties:
-        id:
-          type: string
-      required: [id]
-    http:
-      method: POST
-      url: https://api.example.com/tickets/lookup
-      headers:
-        Authorization: Bearer ${env.TICKETS_TOKEN}
-
-    - name: summarize
-      type: inline-js
-    description: Summarize a long text into bullet points.
-    inputSchema:
-      type: object
-      properties:
-        text:
-          type: string
-      required: [text]
-    runtime:
-      sandbox: true
-      timeoutMs: 2000
-    execute: |
-      export default async function execute({ text }) {
-        return { bullets: String(text).split(/\n+/).slice(0, 5) };
+```json
+{
+  "version": "1.0",
+  "agent": {
+    "name": "support-agent",
+    "description": "Answers support questions and can call tools.",
+    "system": "You are a support agent.\n- Be concise.\n- If you use tools, explain what you're doing."
+  },
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4o-mini",
+    "temperature": 0.2,
+    "maxOutputTokens": 1200
+  },
+  "loop": {
+    "maxSteps": 10,
+    "toolChoice": "auto"
+  },
+  "tools": [
+    {
+      "id": "ticket_lookup",
+      "type": "http",
+      "description": "Lookup a ticket by id.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"]
+      },
+      "http": {
+        "method": "POST",
+        "url": "https://api.example.com/tickets/lookup",
+        "headers": {
+          "Authorization": "Bearer ${env.TICKETS_TOKEN}"
+        }
       }
-
-mcp:
-  servers:
-    - name: github
-      url: https://mcp.example.com/github
-      transport: http
-      headers:
-        Authorization: Bearer ${env.GITHUB_TOKEN}
-        tools:
-          mode: discover
-          allow:
-            - search_issues
-            - get_issue
+    },
+    {
+      "id": "summarize",
+      "type": "frontend",
+      "description": "Summarize a long text into bullet points (frontend-only, no execution).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": ["text"]
+      },
+      "ui": {
+        "component": "summarizer",
+        "noExecution": true
+      }
+    }
+  ],
+  "mcp": {
+    "servers": [
+      {
+        "name": "github",
+        "url": "https://mcp.example.com/github",
+        "transport": "http",
+        "headers": {
+          "Authorization": "Bearer ${env.GITHUB_TOKEN}"
+        },
+        "allowedTools": ["search_issues", "get_issue"]
+      }
+    ]
+  }
+}
 ```
 
-### Notes on the YAML design
+### Notes on the JSON design
 
-- The simplified format keeps the YAML easy to author while still mapping cleanly to `ToolLoopAgent`.
+- The simplified format keeps the JSON easy to author while still mapping cleanly to `ToolLoopAgent`.
 - `agent.name` is useful for logging, caching, and client UI.
-- `model` should be **provider-agnostic** in YAML, but mapped to provider instances in server code.
-- `inputSchema` is shown as **JSON Schema-like** to keep YAML portable.
+- `model` should be **provider-agnostic** in JSON, but mapped to provider instances in server code.
+- `inputSchema` follows **JSON Schema** format.
 - `${env.X}` indicates environment interpolation (recommended to avoid secrets in configs).
 
 ## Tool sources
 
 A “dynamic agent builder” is mostly a **tool builder**.
 
-### Inline tools (JS code)
+### Frontend tools
 
-Inline tool code unlocks maximum flexibility but is also the highest risk.
+Frontend tools are UI-only tools that don't execute any code on the server. They are safe by design and can be used for:
 
-<Note type="warning">
-  Executing tool code received from requests is equivalent to remote code
-  execution (RCE) unless you sandbox it. In production, treat this as a
-  dangerous capability and consider disabling it entirely.
-</Note>
+- Form inputs and validation
+- Data visualization
+- User interaction components
+- Client-side calculations
+
+Frontend tools are defined with `type: "frontend"` and include a `ui` component specification.
+
+### HTTP tools
+
+HTTP tools allow the agent to make external API requests.
 
 Recommended policy:
 
-- **Default: disabled** for untrusted callers
-- If enabled:
-  - Run in a **sandbox** (isolate filesystem/network/process)
-  - Enforce **timeouts** and **memory limits**
-  - Apply an **allowlist** of allowed imports/APIs
-  - Log everything (tool name, input, duration, errors)
+- **Allowlist-only domains**: Only allow requests to pre-approved domains
+- **Enforce timeouts**: Set reasonable timeout limits for HTTP requests
+- **Validate responses**: Ensure response structure matches expected schema
+- **Log all requests**: Track endpoint calls, durations, and errors
 
 ### Registry tools
 
-Instead of shipping code in YAML, you can refer to:
+Instead of defining tools inline, you can refer to:
 
 - `type: registry`
 - `ref: tools.myTool@1.2.3`
@@ -174,7 +184,7 @@ MCP is a good fit when you want tools owned by other services.
 
 Workflow:
 
-1. Create an MCP client from YAML transport settings
+1. Create an MCP client from JSON transport settings
 2. Fetch tools from the MCP server (`discover` or `schemas` mode)
 3. Merge MCP tools into the agent’s toolset
 4. Close MCP clients when the stream finishes
@@ -208,32 +218,34 @@ Also do cleanup on abort (close MCP clients, cancel fetches, etc.).
 
 ## Validation + normalization
 
-Treat YAML as an **untrusted input format**, even if you control the caller.
+Treat JSON as an **untrusted input format**, even if you control the caller.
 
 Recommended pipeline:
 
-- Parse YAML to a JS object
-- Validate against a schema
+- Parse JSON to a JS object
+- Validate against a schema (e.g., using Zod)
 - Normalize defaults (e.g. `loop.maxSteps`, `model.temperature`)
 - Enforce global constraints:
   - Max tools
   - Max steps
-  - Disallow certain tool types
-  - Require approval for “dangerous” tools
+  - Disallow server-side code execution
+  - Require approval for external HTTP tools
 
 ## Execution policy (important)
 
 A dynamic agent builder needs an explicit stance on:
 
-- **Which tools are allowed**
-- **When tool calls require approval**
-- **Whether a tool may access network / filesystem**
+- **Which tools are allowed** (frontend, HTTP, registry)
+- **When HTTP tools require approval**
+- **Which domains can be accessed** by HTTP tools
+- **No server-side code execution** is permitted
 
 Common policies:
 
-- **Allowlist-only**: only tools from a known registry can run
-- **Tenant-scoped allowlists**: each tenant has a permitted tool + MCP list
-- **Approval required**: some tools can only run if the user explicitly approves
+- **Frontend-only by default**: Only frontend tools can run without approval
+- **HTTP allowlist**: Only approved domains can be accessed via HTTP tools
+- **Tenant-scoped allowlists**: Each tenant has a permitted tool + domain list
+- **Approval required**: HTTP tools need explicit user approval
 
 ## Operational concerns
 
@@ -256,15 +268,15 @@ At minimum, log:
 
 ### Secrets
 
-Do not allow secrets to be embedded directly in YAML.
+Do not allow secrets to be embedded directly in JSON.
 
 - Use environment interpolation (`${env.X}`)
 - Or use a server-side secret store keyed by tenant
 
 ## Recommended next steps
 
-- Define the YAML schema formally (versioned)
-- Decide on a tool security model (registry-first vs inline)
+- Define the JSON schema formally (versioned, using Zod or JSON Schema)
+- Decide on a tool security model (frontend + HTTP + registry)
 - Choose a streaming protocol that matches your client (UI message streams)
 - Implement a minimal end-to-end path:
-  - YAML -> validate -> build `ToolLoopAgent` -> stream response -> cleanup
+  - JSON -> validate -> build `ToolLoopAgent` -> stream response -> cleanup

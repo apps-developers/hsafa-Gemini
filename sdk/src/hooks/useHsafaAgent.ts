@@ -44,9 +44,9 @@ import { useStreamingToolInput } from '../components/hsafa-chat/hooks/useStreami
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
 
 export interface UseHsafaAgentConfig {
-  /** The agent name (references .hsafa/agents/{agentName}.hsafa) */
+  /** The agent name (references .hsafa/agents/{agentName}.json) */
   agentName: string;
-  /** The agent configuration string */
+  /** The agent configuration string (JSON format) */
   agentConfig: string;
   /** Base URL of your backend server */
   baseUrl?: string;

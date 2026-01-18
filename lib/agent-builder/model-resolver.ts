@@ -1,7 +1,7 @@
-import { openai } from '@ai-sdk/openai';
-import { anthropic } from '@ai-sdk/anthropic';
-import { google } from '@ai-sdk/google';
-import { xai } from '@ai-sdk/xai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createXai } from '@ai-sdk/xai';
 import type { LanguageModel } from 'ai';
 import type { ModelConfig } from './types';
 
@@ -17,17 +17,33 @@ export function resolveModel(config: ModelConfig): LanguageModel {
 
   try {
     switch (provider.toLowerCase()) {
-      case 'openai':
+      case 'openai': {
+        const openai = createOpenAI({
+          apiKey: process.env.OPENAI_API_KEY,
+        });
         return openai(name);
+      }
       
-      case 'anthropic':
+      case 'anthropic': {
+        const anthropic = createAnthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+        });
         return anthropic(name);
+      }
       
-      case 'google':
+      case 'google': {
+        const google = createGoogleGenerativeAI({
+          apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+        });
         return google(name);
+      }
       
-      case 'xai':
+      case 'xai': {
+        const xai = createXai({
+          apiKey: process.env.XAI_API_KEY,
+        });
         return xai(name);
+      }
       
       default:
         throw new ModelResolverError(
