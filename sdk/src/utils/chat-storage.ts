@@ -21,6 +21,10 @@ export function createChatStorage(agentId: string) {
   const showChatKey = `${LS_PREFIX}.showChat`;
 
   const loadChatsIndex = (): ChatMeta[] => {
+    // Check if we're on the server side
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') {
+      return [];
+    }
     try {
       const raw = localStorage.getItem(chatsIndexKey);
       return raw ? JSON.parse(raw) : [];
@@ -28,10 +32,12 @@ export function createChatStorage(agentId: string) {
   };
 
   const saveChatsIndex = (list: ChatMeta[]) => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
     try { localStorage.setItem(chatsIndexKey, JSON.stringify(list)); } catch {}
   };
 
   const loadChat = (id: string): ChatData | null => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return null;
     try { 
       const raw = localStorage.getItem(chatKey(id)); 
       return raw ? JSON.parse(raw) : null; 
@@ -39,6 +45,7 @@ export function createChatStorage(agentId: string) {
   };
 
   const saveChat = (data: ChatData) => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
     try { localStorage.setItem(chatKey(data.id), JSON.stringify(data)); } catch {}
   };
 
@@ -56,6 +63,7 @@ export function createChatStorage(agentId: string) {
   };
 
   const deleteChatData = (id: string) => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
     try { localStorage.removeItem(chatKey(id)); } catch {}
   };
 
@@ -64,32 +72,31 @@ export function createChatStorage(agentId: string) {
     deleteChatMeta(id);
   };
 
-  const loadShowChatPreference = (defaultValue: boolean): boolean => {
+  const getShowChat = (): boolean => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return true;
     try {
       const savedShow = localStorage.getItem(showChatKey);
-      return savedShow !== null ? savedShow === 'true' : defaultValue;
-    } catch {
-      return defaultValue;
-    }
+      return savedShow === null ? true : savedShow === 'true';
+    } catch { return true; }
   };
 
-  const saveShowChatPreference = (value: boolean) => {
+  const setShowChat = (value: boolean) => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
     try { localStorage.setItem(showChatKey, String(value)); } catch {}
   };
 
-  const loadCurrentChatId = (): string | null => {
-    try {
-      return localStorage.getItem(currentChatKey);
-    } catch {
-      return null;
-    }
+  const getCurrentChatId = (): string | null => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return null;
+    return localStorage.getItem(currentChatKey);
   };
 
-  const saveCurrentChatId = (chatId: string) => {
+  const setCurrentChatId = (chatId: string) => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
     try { localStorage.setItem(currentChatKey, chatId); } catch {}
   };
 
-  const removeCurrentChatId = () => {
+  const clearCurrentChatId = () => {
+    if (typeof window === 'undefined' || typeof localStorage === 'undefined') return;
     try { localStorage.removeItem(currentChatKey); } catch {}
   };
 
@@ -102,11 +109,11 @@ export function createChatStorage(agentId: string) {
     deleteChatMeta,
     deleteChatData,
     deleteChat,
-    loadShowChatPreference,
-    saveShowChatPreference,
-    loadCurrentChatId,
-    saveCurrentChatId,
-    removeCurrentChatId
+    getShowChat,
+    setShowChat,
+    getCurrentChatId,
+    setCurrentChatId,
+    clearCurrentChatId
   };
 }
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trash2 } from 'lucide-react';
 import { IconWrapper } from '../IconWrapper';
 import { ThemeColors } from '../../utils/chat-theme';
@@ -38,6 +38,12 @@ export function ChatHistoryPanel({
   dir = 'ltr',
   t
 }: ChatHistoryPanelProps) {
+  const [mounted, setMounted] = useState(false);
+  
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  
   const isRTL = dir === 'rtl';
   const filteredChats = search.trim() 
     ? chats.filter(m => (m.title || '').toLowerCase().includes(search.toLowerCase().trim()))
@@ -100,9 +106,13 @@ export function ChatHistoryPanel({
         ) : (
           <div>
             {filteredChats.map((meta, index) => (
-              <div key={meta.id} style={{
-                borderTop: index > 0 ? `1px solid ${resolvedColors.borderColor}` : 'none'
-              }}>
+              <div 
+                key={meta.id} 
+                className={index > 0 ? 'chat-history-item-with-border' : 'chat-history-item'}
+                style={{
+                  '--border-color': resolvedColors.borderColor
+                } as React.CSSProperties}
+              >
                 <div style={{
                   display: 'flex',
                   width: '100%',
@@ -150,7 +160,7 @@ export function ChatHistoryPanel({
                         flexShrink: 0,
                         fontSize: '12px',
                         color: resolvedColors.mutedTextColor
-                      }}>{timeAgo(meta.updatedAt)}</div>
+                      }}>{mounted ? timeAgo(meta.updatedAt) : ''}</div>
                     </div>
                   </button>
                   <button

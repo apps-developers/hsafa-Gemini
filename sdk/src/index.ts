@@ -12,9 +12,6 @@ export * from "./hooks/useFileUploadHook";
 export { useHsafaAgent } from "./hooks/useHsafaAgent";
 export type { UseHsafaAgentConfig, HsafaAgentAPI } from "./hooks/useHsafaAgent";
 
-export { useAgentConfig } from "./hooks/useAgentConfig";
-export type { UseAgentConfigResult } from "./hooks/useAgentConfig";
-
 export { useChatStorage } from "./hooks/useChatStorage";
 export type { 
   UseChatStorageConfig, 

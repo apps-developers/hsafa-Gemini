@@ -22,7 +22,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const { agent } = await buildAgent({ configString: agentConfig });
+    // Convert agentConfig to string if it's an object
+    const configString = typeof agentConfig === 'string' ? agentConfig : JSON.stringify(agentConfig);
+    const { agent } = await buildAgent({ configString });
 
     // Pass messages directly - AI SDK will handle validation and conversion
     return createAgentUIStreamResponse({

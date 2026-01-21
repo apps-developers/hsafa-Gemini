@@ -9,7 +9,7 @@ import { HsafaChatProps } from "../types/chat";
 import { MessageList } from "./hsafa-chat";
 import { ChatInput } from "./hsafa-chat";
 import { PresetPrompts } from "./hsafa-chat";
-import { createChatStorage } from "../utils/chat-storage";
+import { createChatStorage, ChatMeta } from "../utils/chat-storage";
 import { ChatHistoryModal } from "./hsafa-chat/ChatHistoryModal";
 import { ChatHistorySidebar } from "./hsafa-chat/ChatHistorySidebar";
 import { ConfirmEditModal } from "./hsafa-chat/ConfirmEditModal";
@@ -290,7 +290,7 @@ export function HsafaChat({
   const [isOpen, setIsOpen] = useState<boolean>(() => {
     try {
       const tmp = createChatStorage(agentName);
-      return tmp.loadShowChatPreference(Boolean(defaultOpen));
+      return tmp.getShowChat() || Boolean(defaultOpen);
     } catch {
       return Boolean(defaultOpen);
     }
@@ -329,13 +329,16 @@ export function HsafaChat({
   // Keep reference to raw storage for UI preferences
   const storage = chatStorage.storage;
 
-  const chatHistory = useMemo(() => {
+  const [chatHistory, setChatHistory] = useState<ChatMeta[]>([]);
+  
+  // Load chat history after hydration
+  useEffect(() => {
     try {
-      return storage.loadChatsIndex();
+      const history = storage.loadChatsIndex();
+      setChatHistory(history);
     } catch {
-      return [];
+      setChatHistory([]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storage, historyRefreshKey]);
   
   // On mount: restore last opened chat and its messages (uncontrolled only)
@@ -352,12 +355,12 @@ export function HsafaChat({
         if (msgs.length > 0) { try { setMessages(msgs); } catch { /* ignore */ } }
         lastLoadedChatRef.current = currentChat;
       } catch { /* ignore */ }
-      try { storage.saveCurrentChatId(currentChat); } catch { /* ignore */ }
+      try { storage.setCurrentChatId(currentChat); } catch { /* ignore */ }
       restoredOnMountRef.current = true;
       return;
     }
     try {
-      const savedId = storage.loadCurrentChatId();
+      const savedId = storage.getCurrentChatId();
       if (savedId) {
         setChatId(savedId);
         const saved = storage.loadChat(savedId);
@@ -382,14 +385,14 @@ export function HsafaChat({
       const msgs = (saved && Array.isArray((saved as any).messages)) ? (saved as any).messages : [];
       try { setMessages(msgs); } catch { /* ignore */ }
       lastLoadedChatRef.current = currentChat;
-      try { storage.saveCurrentChatId(currentChat); } catch { /* ignore */ }
+      try { storage.setCurrentChatId(currentChat); } catch { /* ignore */ }
     } catch { /* ignore */ }
   }, [currentChat, storage, setMessages]);
 
   // After restore: persist current chatId so it is used on next reload
   useEffect(() => {
     if (!restoredOnMountRef.current) return;
-    try { storage.saveCurrentChatId(chatId); } catch { /* ignore */ }
+    try { storage.setCurrentChatId(chatId); } catch { /* ignore */ }
   }, [chatId, storage]);
 
   // Reflect streaming/open state via provider
@@ -462,12 +465,12 @@ export function HsafaChat({
     try {
       chatStorage.createNewChat(() => {
         setChatId(newId);
-        try { storage.saveCurrentChatId(newId); } catch { /* ignore */ }
+        try { storage.setCurrentChatId(newId); } catch { /* ignore */ }
       });
     } catch {
       // Fallback: still set id to avoid being stuck
       setChatId(newId);
-      try { storage.saveCurrentChatId(newId); } catch { /* ignore */ }
+      try { storage.setCurrentChatId(newId); } catch { /* ignore */ }
     }
   }, [isLoading, clearAttachments, storage, setMessages, setChatId, cleanupAllForms, chatStorage]);
 
@@ -477,7 +480,7 @@ export function HsafaChat({
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
-    try { storage.saveShowChatPreference(false); } catch { /* ignore */ }
+    try { storage.setShowChat(false); } catch { /* ignore */ }
   }, [storage]);
 
 
@@ -575,6 +578,12 @@ export function HsafaChat({
       --hsafa-danger-light: ${resolvedColors.dangerColorLight};
       --hsafa-danger-dark: ${resolvedColors.dangerColorDark};
     }
+    .chat-history-item-with-border {
+      border-top: 1px solid var(--border-color);
+    }
+    .chat-history-item {
+      border-top: none;
+    }
     ${customStyles || ''}
   `;
 
@@ -614,7 +623,7 @@ export function HsafaChat({
               setChatId(id);
               if (currentChat === undefined) {
                 try {
-                  storage.saveCurrentChatId(id);
+                  storage.setCurrentChatId(id);
                 } catch { /* ignore */ }
                 try {
                   const saved = storage.loadChat(id);
@@ -966,7 +975,7 @@ export function HsafaChat({
               setChatId(id);
               if (currentChat === undefined) {
                 try {
-                  storage.saveCurrentChatId(id);
+                  storage.setCurrentChatId(id);
                 } catch { /* ignore */ }
                 try {
                   const saved = storage.loadChat(id);
@@ -1243,7 +1252,7 @@ export function HsafaChat({
             // In controlled mode, messages will be loaded by the effect above
             // In uncontrolled mode, load messages here
             if (currentChat === undefined) {
-              try { storage.saveCurrentChatId(id); } catch { /* ignore */ }
+              try { storage.setCurrentChatId(id); } catch { /* ignore */ }
               try {
                 const saved = storage.loadChat(id);
                 const msgs = (saved && Array.isArray((saved as any).messages)) ? (saved as any).messages : [];
@@ -1359,7 +1368,7 @@ export function HsafaChat({
         {createPortal(panel, document.body)}
         <FloatingChatButton
           show={!isOpen}
-          onClick={() => { setIsOpen(true); try { storage.saveShowChatPreference(true); } catch { /* ignore */ } }}
+          onClick={() => { setIsOpen(true); try { storage.setShowChat(true); } catch { /* ignore */ } }}
           resolvedColors={resolvedColors as any}
           floatingButtonPosition={floatingButtonPosition}
         />

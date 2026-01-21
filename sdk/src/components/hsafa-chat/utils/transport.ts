@@ -10,7 +10,7 @@ export function createHsafaTransport(
   return new DefaultChatTransport({
     api: `${baseUrl}/api/agent`,
     body: {
-      agentConfig,
+      agentConfig: JSON.parse(agentConfig),
       chatId,
       ...templateParams,
     },

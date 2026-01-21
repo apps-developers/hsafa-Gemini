@@ -129,7 +129,7 @@ export function useChatStorage(config: UseChatStorageConfig): ChatStorageAPI {
     if (!autoRestore || restoredOnMountRef.current) return;
     
     try {
-      const savedId = storage.loadCurrentChatId();
+      const savedId = storage.getCurrentChatId();
       if (savedId) {
         createdChatRef.current = true;
       }
@@ -159,7 +159,7 @@ export function useChatStorage(config: UseChatStorageConfig): ChatStorageAPI {
         try {
           storage.upsertChatMeta({ id: chatId, title, createdAt: now, updatedAt: now });
           storage.saveChat({ id: chatId, messages: messages as any, agentId } as any);
-          storage.saveCurrentChatId(chatId);
+          storage.setCurrentChatId(chatId);
           createdChatRef.current = true;
           refreshChatList();
         } catch (error) {
@@ -214,7 +214,7 @@ export function useChatStorage(config: UseChatStorageConfig): ChatStorageAPI {
           }
           const title = (titleSource || 'New chat').slice(0, 80);
           storage.upsertChatMeta({ id: chatId, title, createdAt: now, updatedAt: now });
-          try { storage.saveCurrentChatId(chatId); } catch {}
+          try { storage.setCurrentChatId(chatId); } catch {}
           createdChatRef.current = true;
         }
 
@@ -277,7 +277,7 @@ export function useChatStorage(config: UseChatStorageConfig): ChatStorageAPI {
     
     try {
       createdChatRef.current = true;
-      storage.saveCurrentChatId(newChatId);
+      storage.setCurrentChatId(newChatId);
       const saved = storage.loadChat(newChatId);
       const msgs = (saved && Array.isArray((saved as any).messages)) ? (saved as any).messages : [];
       setMessages(msgs);
