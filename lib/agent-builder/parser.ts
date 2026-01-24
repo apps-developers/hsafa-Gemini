@@ -7,27 +7,18 @@ export class AgentConfigParseError extends Error {
   }
 }
 
-export function parseAgentConfig(configString: string): AgentConfig {
+export function validateAgentConfig(config: unknown): AgentConfig {
   try {
-    const parsed = JSON.parse(configString);
-    
-    if (!parsed || typeof parsed !== 'object') {
-      throw new AgentConfigParseError('Invalid JSON: expected an object');
+    if (!config || typeof config !== 'object') {
+      throw new AgentConfigParseError('Invalid config: expected an object');
     }
 
-    const validated = AgentConfigSchema.parse(parsed);
+    const validated = AgentConfigSchema.parse(config);
     
     return validated;
   } catch (error) {
     if (error instanceof AgentConfigParseError) {
       throw error;
-    }
-    
-    if (error instanceof SyntaxError) {
-      throw new AgentConfigParseError(
-        `JSON parsing failed: ${error.message}`,
-        error
-      );
     }
     
     throw new AgentConfigParseError(

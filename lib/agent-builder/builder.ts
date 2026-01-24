@@ -1,10 +1,10 @@
 import { ToolLoopAgent, stepCountIs } from 'ai';
-import { parseAgentConfig, interpolateConfigEnvVars } from './parser';
+import { validateAgentConfig, interpolateConfigEnvVars } from './parser';
 import { resolveModel, getModelSettings } from './model-resolver';
 import type { AgentConfig } from './types';
 
 export interface BuildAgentOptions {
-  configString: string;
+  config: AgentConfig;
 }
 
 export interface BuildAgentResult {
@@ -20,12 +20,12 @@ export class AgentBuildError extends Error {
 }
 
 export async function buildAgent(options: BuildAgentOptions): Promise<BuildAgentResult> {
-  const { configString } = options;
+  const { config } = options;
 
-  let config: AgentConfig;
+  let validatedConfig: AgentConfig;
   try {
-    config = parseAgentConfig(configString);
-    config = interpolateConfigEnvVars(config);
+    validatedConfig = validateAgentConfig(config);
+    validatedConfig = interpolateConfigEnvVars(validatedConfig);
   } catch (error) {
     throw new AgentBuildError(
       `Failed to parse agent configuration: ${error instanceof Error ? error.message : String(error)}`,
@@ -34,18 +34,18 @@ export async function buildAgent(options: BuildAgentOptions): Promise<BuildAgent
   }
 
   try {
-    const model = resolveModel(config.model);
-    const modelSettings = getModelSettings(config.model);
+    const model = resolveModel(validatedConfig.model);
+    const modelSettings = getModelSettings(validatedConfig.model);
 
     const agent = new ToolLoopAgent({
       model,
-      instructions: config.agent.system,
-      stopWhen: stepCountIs(config.loop?.maxSteps ?? 20),
-      toolChoice: config.loop?.toolChoice ?? 'auto',
+      instructions: validatedConfig.agent.system,
+      stopWhen: stepCountIs(validatedConfig.loop?.maxSteps ?? 20),
+      toolChoice: validatedConfig.loop?.toolChoice ?? 'auto',
       ...modelSettings,
     });
 
-    return { agent, config };
+    return { agent, config: validatedConfig };
   } catch (error) {
     throw new AgentBuildError(
       `Failed to build agent: ${error instanceof Error ? error.message : String(error)}`,
