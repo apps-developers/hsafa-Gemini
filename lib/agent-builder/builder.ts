@@ -1,6 +1,7 @@
 import { ToolLoopAgent, stepCountIs } from 'ai';
 import { validateAgentConfig, interpolateConfigEnvVars } from './parser';
 import { resolveModel, getModelSettings } from './model-resolver';
+import { resolveTools } from './tool-resolver';
 import type { AgentConfig } from './types';
 
 export interface BuildAgentOptions {
@@ -36,12 +37,16 @@ export async function buildAgent(options: BuildAgentOptions): Promise<BuildAgent
   try {
     const model = resolveModel(validatedConfig.model);
     const modelSettings = getModelSettings(validatedConfig.model);
+    const tools = validatedConfig.tools && validatedConfig.tools.length > 0 
+      ? resolveTools(validatedConfig.tools) 
+      : undefined;
 
     const agent = new ToolLoopAgent({
       model,
       instructions: validatedConfig.agent.system,
       stopWhen: stepCountIs(validatedConfig.loop?.maxSteps ?? 20),
       toolChoice: validatedConfig.loop?.toolChoice ?? 'auto',
+      tools,
       ...modelSettings,
     });
 

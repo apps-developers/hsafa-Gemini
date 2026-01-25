@@ -24,42 +24,57 @@ export const RuntimeConfigSchema = z.object({
   }),
 });
 
-export const HttpToolSchema = z.object({
-  id: z.string(),
-  type: z.literal('http'),
-  description: z.string(),
-  inputSchema: z.record(z.string(), z.unknown()),
-  http: z.object({
-    method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']),
-    url: z.string(),
-    headers: z.record(z.string(), z.string()).optional(),
-  }),
+export const BasicExecutionSchema = z.object({
+  mode: z.enum(['no-execution', 'static', 'pass-through']).default('no-execution'),
+  output: z.record(z.string(), z.unknown()).optional(),
+  template: z.boolean().optional().default(false),
 });
 
-export const InlineJsToolSchema = z.object({
-  id: z.string(),
-  type: z.literal('inline_js'),
-  description: z.string(),
-  inputSchema: z.record(z.string(), z.unknown()),
-  runtime: z.object({
-    sandbox: z.boolean().optional().default(true),
-    timeoutMs: z.number().positive().optional().default(2000),
-  }).optional(),
-  execute: z.string(),
+export const RequestExecutionSchema = z.object({
+  url: z.string(),
+  method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']),
+  headers: z.record(z.string(), z.string()).optional(),
+  timeout: z.number().optional().default(30000),
 });
 
-export const RegistryToolSchema = z.object({
-  id: z.string(),
-  type: z.literal('registry'),
-  ref: z.string(),
+export const AiAgentExecutionSchema = z.object({
+  agentConfig: z.record(z.string(), z.unknown()),
+  includeContext: z.boolean().optional().default(false),
+  timeout: z.number().optional().default(30000),
+});
+
+export const WaitingExecutionSchema = z.object({
+  duration: z.number().optional(),
+  reason: z.string().optional(),
+});
+
+export const ComputeExecutionSchema = z.object({
+  operation: z.string(),
+  expression: z.string(),
+});
+
+export const ImageGeneratorExecutionSchema = z.object({
+  provider: z.enum(['dall-e', 'stable-diffusion', 'midjourney']),
+  size: z.string().optional().default('1024x1024'),
+  quality: z.enum(['standard', 'hd']).optional().default('standard'),
+  style: z.string().optional(),
+  includeContext: z.boolean().optional().default(false),
+});
+
+export const ToolSchema = z.object({
+  name: z.string(),
   description: z.string().optional(),
+  inputSchema: z.record(z.string(), z.unknown()).optional(),
+  executionType: z.enum(['basic', 'request', 'ai-agent', 'waiting', 'compute', 'image-generator']).optional().default('basic'),
+  execution: z.union([
+    BasicExecutionSchema,
+    RequestExecutionSchema,
+    AiAgentExecutionSchema,
+    WaitingExecutionSchema,
+    ComputeExecutionSchema,
+    ImageGeneratorExecutionSchema,
+  ]).nullable().optional(),
 });
-
-export const ToolSchema = z.discriminatedUnion('type', [
-  HttpToolSchema,
-  InlineJsToolSchema,
-  RegistryToolSchema,
-]);
 
 export const McpServerSchema = z.object({
   name: z.string(),
@@ -94,8 +109,11 @@ export type AgentDetails = z.infer<typeof AgentDetailsSchema>;
 export type LoopConfig = z.infer<typeof LoopConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
 export type ToolConfig = z.infer<typeof ToolSchema>;
-export type HttpToolConfig = z.infer<typeof HttpToolSchema>;
-export type InlineJsToolConfig = z.infer<typeof InlineJsToolSchema>;
-export type RegistryToolConfig = z.infer<typeof RegistryToolSchema>;
+export type BasicExecution = z.infer<typeof BasicExecutionSchema>;
+export type RequestExecution = z.infer<typeof RequestExecutionSchema>;
+export type AiAgentExecution = z.infer<typeof AiAgentExecutionSchema>;
+export type WaitingExecution = z.infer<typeof WaitingExecutionSchema>;
+export type ComputeExecution = z.infer<typeof ComputeExecutionSchema>;
+export type ImageGeneratorExecution = z.infer<typeof ImageGeneratorExecutionSchema>;
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
 export type McpConfig = z.infer<typeof McpConfigSchema>;
