@@ -1,166 +1,85 @@
-import { tool, jsonSchema } from 'ai';
+import { jsonSchema, tool, type ToolExecutionOptions } from 'ai';
 import type { ToolConfig } from './types';
+import { executeBasic, isNoExecutionBasic } from './tools/basic';
+import { executeRequest } from './tools/request';
+import { executeWaiting } from './tools/waiting';
+import { executeCompute } from './tools/compute';
+import { executeAiAgent } from './tools/ai-agent';
+import { executeImageGenerator } from './tools/image-generator';
 
-function interpolateTemplate(template: Record<string, unknown>, variables: Record<string, unknown>): Record<string, unknown> {
-  const json = JSON.stringify(template);
-  const interpolated = json.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
-    const value = variables[key.trim()];
-    return value !== undefined ? String(value) : `{{${key}}}`;
-  });
-  return JSON.parse(interpolated);
-}
+const defaultPromptSchema = {
+  type: 'object',
+  properties: {
+    prompt: { type: 'string' },
+  },
+  required: ['prompt'],
+} as const;
+
+const emptyObjectSchema = { type: 'object', properties: {} } as const;
 
 export function buildTool(config: ToolConfig) {
-  const executionType = config.executionType || 'basic';
   const inputSchema =
-    config.inputSchema ||
-    (executionType === 'ai-agent' || executionType === 'image-generator'
-      ? {
-          type: 'object',
-          properties: {
-            prompt: { type: 'string' },
-          },
-          required: ['prompt'],
-        }
-      : { type: 'object', properties: {} });
+    config.inputSchema ??
+    (config.executionType === 'ai-agent' || config.executionType === 'image-generator' ? defaultPromptSchema : emptyObjectSchema);
 
-  const execution = config.execution;
-  const isNoExecution =
-    executionType === 'basic' &&
-    (!execution ||
-      !('mode' in execution) ||
-      (execution as any).mode === 'no-execution');
+  const schema = jsonSchema(inputSchema as Parameters<typeof jsonSchema>[0]);
 
-  const toolConfig: any = {
-    description: config.description,
-    inputSchema: jsonSchema(inputSchema),
-  };
+  if (config.executionType === 'basic') {
+    const execution = config.execution ?? null;
 
-  if (!isNoExecution) {
-    toolConfig.execute = async (input: any) => {
-      switch (executionType) {
-        case 'basic':
-          return executeBasic(config, input);
-        case 'request':
-          return executeRequest(config, input);
-        case 'ai-agent':
-          return executeAiAgent(config, input);
-        case 'waiting':
-          return executeWaiting(config, input);
-        case 'compute':
-          return executeCompute(config, input);
-        case 'image-generator':
-          return executeImageGenerator(config, input);
-        default:
-          throw new Error(`Unknown execution type: ${executionType}`);
-      }
-    };
-  }
-
-  return tool(toolConfig);
-}
-
-function executeBasic(config: ToolConfig, input: any) {
-  const execution = config.execution as any;
-  const mode = execution?.mode || 'no-execution';
-
-  if (mode === 'static') {
-    let output = execution.output || {};
-    
-    if (execution.template && input.variables) {
-      output = interpolateTemplate(output, input.variables);
+    if (isNoExecutionBasic(execution)) {
+      return tool({ description: config.description, inputSchema: schema });
     }
-    
-    return {
-      success: true,
-      ...output,
-    };
-  }
-  
-  if (mode === 'pass-through') {
-    return {
-      success: true,
-      ...input,
-    };
-  }
-  
-  return {
-    success: true,
-    ...input,
-  };
-}
 
-async function executeRequest(config: ToolConfig, input: any) {
-  const execution = config.execution;
-  
-  if (!execution || !('url' in execution)) {
-    throw new Error('Request execution requires url configuration');
+    return tool({
+      description: config.description,
+      inputSchema: schema,
+      execute: async (input: unknown) => executeBasic(execution, input),
+    });
   }
 
-  let url = execution.url;
-  let headers = execution.headers || {};
-  
-  url = interpolateString(url, input);
-  headers = Object.entries(headers).reduce((acc, [key, value]) => {
-    acc[key] = interpolateString(value, input);
-    return acc;
-  }, {} as Record<string, string>);
+  if (config.executionType === 'request') {
+    return tool({
+      description: config.description,
+      inputSchema: schema,
+      execute: async (input: unknown, options: ToolExecutionOptions) => executeRequest(config.execution, input, options),
+    });
+  }
 
-  const response = await fetch(url, {
-    method: execution.method,
-    headers,
-    body: execution.method !== 'GET' ? JSON.stringify(input) : undefined,
-    signal: AbortSignal.timeout(execution.timeout || 30000),
-  });
+  if (config.executionType === 'waiting') {
+    const execution = config.execution ?? null;
+    return tool({
+      description: config.description,
+      inputSchema: schema,
+      execute: async (input: unknown) => executeWaiting(execution, input),
+    });
+  }
 
-  const data = await response.json();
-  
-  return {
-    success: response.ok,
-    ...data,
-    status: response.status,
-  };
-}
+  if (config.executionType === 'compute') {
+    return tool({
+      description: config.description,
+      inputSchema: schema,
+      execute: async (input: unknown) => executeCompute(config.execution, input),
+    });
+  }
 
-function interpolateString(template: string, variables: Record<string, any>): string {
-  return template.replace(/\{\{([^}]+)\}\}/g, (_, key) => {
-    const value = variables[key.trim()];
-    return value !== undefined ? String(value) : `{{${key}}}`;
-  });
-}
+  if (config.executionType === 'ai-agent') {
+    return tool({
+      description: config.description,
+      inputSchema: schema,
+      execute: (input: unknown, options: ToolExecutionOptions) => executeAiAgent(config.execution, input, options),
+    });
+  }
 
-async function executeAiAgent(config: ToolConfig, input: any) {
-  return {
-    success: false,
-    error: 'AI Agent execution not yet implemented',
-  };
-}
+  if (config.executionType === 'image-generator') {
+    return tool({
+      description: config.description,
+      inputSchema: schema,
+      execute: async (input: unknown, options: ToolExecutionOptions) => executeImageGenerator(config.execution, input, options),
+    });
+  }
 
-async function executeWaiting(config: ToolConfig, input: any) {
-  const execution = config.execution;
-  const duration = input.duration || (execution && 'duration' in execution ? execution.duration : 0) || 0;
-  const reason = input.reason || (execution && 'reason' in execution ? execution.reason : undefined);
-
-  await new Promise(resolve => setTimeout(resolve, duration));
-  
-  return {
-    success: true,
-    waited: duration,
-    reason,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-async function executeCompute(config: ToolConfig, input: any) {
-  return {
-    success: false,
-    error: 'Compute execution not yet implemented',
-  };
-}
-
-async function executeImageGenerator(config: ToolConfig, input: any) {
-  return {
-    success: false,
-    error: 'Image generator execution not yet implemented',
-  };
+  const _exhaustive: never = config;
+  void _exhaustive;
+  throw new Error(`Unknown execution type`);
 }

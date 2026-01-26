@@ -40,15 +40,27 @@ export function interpolateEnvVars(value: string, env: Record<string, string | u
   });
 }
 
+function interpolateEnvVarsDeep(value: unknown, env: Record<string, string | undefined> = process.env): unknown {
+  if (typeof value === 'string') return interpolateEnvVars(value, env);
+  if (Array.isArray(value)) return value.map((v) => interpolateEnvVarsDeep(v, env));
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] = interpolateEnvVarsDeep(v, env);
+    }
+    return out;
+  }
+  return value;
+}
+
 export function interpolateConfigEnvVars(config: AgentConfig): AgentConfig {
   const cloned = structuredClone(config);
   
   if (cloned.tools) {
     for (const tool of cloned.tools) {
-      if (tool.type === 'http' && tool.http.headers) {
-        for (const [key, value] of Object.entries(tool.http.headers)) {
-          tool.http.headers[key] = interpolateEnvVars(value);
-        }
+      if (tool.executionType === 'request') {
+        tool.execution = interpolateEnvVarsDeep(tool.execution) as typeof tool.execution;
       }
     }
   }

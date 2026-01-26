@@ -63,6 +63,6 @@ export function resolveModel(config: ModelConfig): LanguageModel {
 export function getModelSettings(config: ModelConfig) {
   return {
     temperature: config.temperature,
-    maxTokens: config.maxOutputTokens,
+    maxOutputTokens: config.maxOutputTokens,
   };
 }

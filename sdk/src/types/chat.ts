@@ -14,13 +14,13 @@ export type Attachment = {
 
 export type UserContentPart =
   | { type: 'text'; text: string }
-  | { type: 'image'; image: URL; mediaType: string }
-  | { type: 'file'; data: string; mediaType: string; name?: string };
+  | { type: 'image'; image: string | URL; mediaType?: string }
+  | { type: 'file'; data: string | URL; mediaType: string; name?: string };
 
 export type AssistantContentPart =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
-  | { type: 'tool-call'; toolCallId: string; toolName?: string; input?: any };
+  | { type: 'tool-call'; toolCallId: string; toolName?: string; input?: unknown };
 
 export type ChatMessage =
   | {
@@ -40,6 +40,8 @@ export type ChatMessage =
       reasoning?: string;
       reasoningOpen?: boolean;
       mainAgentActions?: any[];
+      mcpToolCalls?: Array<{ toolName: string; args: unknown; timestamp?: number; status?: string }>;
+      mcpToolResults?: Record<string, unknown>;
       createdAt?: number;
     };
 

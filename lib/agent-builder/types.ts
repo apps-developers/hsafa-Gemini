@@ -34,12 +34,15 @@ export const RequestExecutionSchema = z.object({
   url: z.string(),
   method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']),
   headers: z.record(z.string(), z.string()).optional(),
+  queryParams: z.record(z.string(), z.unknown()).optional(),
+  body: z.unknown().optional(),
   timeout: z.number().optional().default(30000),
 });
 
 export const AiAgentExecutionSchema = z.object({
   agentConfig: z.record(z.string(), z.unknown()),
   includeContext: z.boolean().optional().default(false),
+  stream: z.boolean().optional().default(false),
   timeout: z.number().optional().default(30000),
 });
 
@@ -57,14 +60,15 @@ export const ImageGeneratorExecutionSchema = z.object({
   provider: z.enum(['dall-e', 'stable-diffusion']),
   size: z.string().optional().default('1024x1024'),
   quality: z.enum(['standard', 'hd']).optional().default('standard'),
+  style: z.string().optional(),
   includeContext: z.boolean().optional().default(false),
 });
 
 export const ToolSchema = z.preprocess(
   (value) => {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const v = value as any;
-      if (v.executionType == null) v.executionType = 'basic';
+      const v = value as Record<string, unknown>;
+      if (v.executionType == null) return { ...v, executionType: 'basic' };
     }
     return value;
   },
