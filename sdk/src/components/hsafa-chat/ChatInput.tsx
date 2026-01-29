@@ -1,16 +1,5 @@
 import React from "react";
-
-type ThemeColors = {
-  textColor: string;
-  mutedTextColor: string;
-  borderColor: string;
-  inputBackground: string;
-  cardBackground: string;
-  primaryColor: string;
-  hoverBackground: string;
-  errorColor: string;
-  errorColorLight?: string;
-};
+import type { ThemeColors } from "../../utils/chat-theme";
 
 interface ChatInputProps {
   input: string;

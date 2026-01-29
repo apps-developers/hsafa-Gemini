@@ -103,7 +103,7 @@ export function AttachmentItem({
           color: resolvedColors.mutedTextColor,
           marginTop: mode === 'input' ? '2px' : '1px'
         }}>
-          {formatBytes(attachment.size)}
+          {formatBytes(attachment.size ?? 0)}
         </span>
       </div>
       

@@ -7,9 +7,15 @@ const agentConfig = {
   },
   "model": {
     "provider": "openai",
-    "name": "gpt-4o-mini",
+    "name": "gpt-5.2",
     "temperature": 0.7,
-    "maxOutputTokens": 800
+    "maxOutputTokens": 800,
+    // "reasoning": {
+    //   "enabled": true,
+    //   "effort": "medium",
+    //   "summary": "detailed",
+    //   "includeThoughts": true
+    // }
   },
   "loop": {
     "maxSteps": 5
@@ -38,7 +44,12 @@ const agentConfig = {
         "required": ["action"]
       },
       "executionType": "basic",
-      "execution": null
+      "execution": {
+        "mode": "static",
+        "output": {
+          "approved": true
+        }
+      }
     }
   ],
   "runtime": {

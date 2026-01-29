@@ -2,16 +2,7 @@ import React from 'react';
 import { Plus } from 'lucide-react';
 import { Attachment } from '../../types/chat';
 import { AttachmentDisplay } from '../AttachmentDisplay';
-
-type ThemeColors = {
-  primaryColor: string;
-  accentColor: string;
-  textColor: string;
-  mutedTextColor: string;
-  borderColor: string;
-  inputBackground: string;
-  cardBackground: string;
-};
+import type { ThemeColors } from '../../utils/chat-theme';
 
 interface MessageEditorProps {
   messageId: string;

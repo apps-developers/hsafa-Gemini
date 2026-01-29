@@ -34,6 +34,7 @@
  */
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import type { ComponentType, MutableRefObject } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { useHsafa } from '../providers/HsafaProvider';
 import { createHsafaTransport } from '../components/hsafa-chat/utils/transport';
@@ -53,7 +54,7 @@ export interface UseHsafaAgentConfig {
   /** Custom tools that the agent can use */
   tools?: Record<string, any>;
   /** Custom UI components for rendering tool results */
-  uiComponents?: Record<string, React.ComponentType<any>>;
+  uiComponents?: Record<string, ComponentType<any>>;
   /** Callback when a message starts */
   onStart?: (message: any) => void;
   /** Callback when a message finishes */
@@ -113,9 +114,11 @@ export interface HsafaAgentAPI {
   
   // Form handling
   /** Ref to form host elements (for requestInput tool) */
-  formHostRef: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  formHostRef: MutableRefObject<Map<string, HTMLDivElement>>;
   /** Ref to form state (for requestInput tool) */
-  formStateRef: React.MutableRefObject<Map<string, { submitted?: boolean; skipped?: boolean; values?: Record<string, any> }>>;
+  formStateRef: MutableRefObject<
+    Map<string, { submitted?: boolean; skipped?: boolean; values?: Record<string, any> }>
+  >;
   /** Cleanup all active forms */
   cleanupForms: () => void;
   

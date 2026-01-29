@@ -1,10 +1,116 @@
 import { z } from 'zod';
 
+export type JSONValue =
+  | null
+  | string
+  | number
+  | boolean
+  | { [key: string]: JSONValue | undefined }
+  | JSONValue[];
+
+export type JSONObject = { [key: string]: JSONValue | undefined };
+
+export type ProviderOptions = Record<string, JSONObject>;
+
+const JsonPrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+const JsonValueSchema: z.ZodType<JSONValue> = z.lazy(
+  () =>
+    z.union([
+      JsonPrimitiveSchema,
+      z.array(JsonValueSchema),
+      z.record(z.string(), JsonValueSchema),
+    ]) as z.ZodType<JSONValue>
+);
+
+const JsonObjectSchema: z.ZodType<JSONObject> = z.record(z.string(), JsonValueSchema);
+
+export const OpenAIProviderOptionsSchema: z.ZodType<JSONObject> = z
+  .object({
+    parallelToolCalls: z.boolean().optional(),
+    store: z.boolean().optional(),
+    user: z.string().optional(),
+
+    reasoningEffort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+    reasoningSummary: z.enum(['auto', 'detailed']).optional(),
+    systemMessageMode: z.enum(['system', 'developer', 'remove']).optional(),
+    forceReasoning: z.boolean().optional(),
+
+    serviceTier: z.enum(['auto', 'flex', 'priority', 'default']).optional(),
+    textVerbosity: z.enum(['low', 'medium', 'high']).optional(),
+  })
+  .catchall(JsonValueSchema) as unknown as z.ZodType<JSONObject>;
+
+export const AnthropicProviderOptionsSchema: z.ZodType<JSONObject> = z
+  .object({
+    disableParallelToolUse: z.boolean().optional(),
+    sendReasoning: z.boolean().optional(),
+    effort: z.enum(['high', 'medium', 'low']).optional(),
+    thinking: z
+      .discriminatedUnion('type', [
+        z.object({
+          type: z.literal('enabled'),
+          budgetTokens: z.number().int().positive(),
+        }),
+        z.object({
+          type: z.literal('disabled'),
+        }),
+      ])
+      .optional(),
+    toolStreaming: z.boolean().optional(),
+    structuredOutputMode: z.enum(['outputFormat', 'jsonTool', 'auto']).optional(),
+  })
+  .catchall(JsonValueSchema) as unknown as z.ZodType<JSONObject>;
+
+export const GoogleProviderOptionsSchema: z.ZodType<JSONObject> = z
+  .object({
+    thinkingConfig: z
+      .object({
+        thinkingLevel: z.enum(['minimal', 'low', 'medium', 'high']).optional(),
+        thinkingBudget: z.number().int().nonnegative().optional(),
+        includeThoughts: z.boolean().optional(),
+      })
+      .optional(),
+  })
+  .catchall(JsonValueSchema);
+
+export const XaiProviderOptionsSchema: z.ZodType<JSONObject> = z
+  .object({
+    reasoningEffort: z.enum(['low', 'medium', 'high']).optional(),
+    store: z.boolean().optional(),
+    previousResponseId: z.string().optional(),
+  })
+  .catchall(JsonValueSchema);
+
+export const ProviderOptionsSchema: z.ZodType<ProviderOptions> = z
+  .object({
+    openai: OpenAIProviderOptionsSchema.optional(),
+    anthropic: AnthropicProviderOptionsSchema.optional(),
+    google: GoogleProviderOptionsSchema.optional(),
+    xai: XaiProviderOptionsSchema.optional(),
+  })
+  .catchall(JsonObjectSchema) as unknown as z.ZodType<ProviderOptions>;
+
+export const ReasoningConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']).optional(),
+    budgetTokens: z.number().int().positive().optional(),
+    includeThoughts: z.boolean().optional(),
+    summary: z.enum(['auto', 'detailed']).optional(),
+    systemMessageMode: z.enum(['system', 'developer', 'remove']).optional(),
+    forceReasoning: z.boolean().optional(),
+  })
+  .catchall(JsonValueSchema);
+
 export const ModelConfigSchema = z.object({
   provider: z.string(),
   name: z.string(),
+  api: z.enum(['default', 'responses', 'chat', 'completion']).optional().default('default'),
   temperature: z.number().min(0).max(2).optional().default(0.7),
   maxOutputTokens: z.number().positive().optional().default(1000),
+  reasoning: ReasoningConfigSchema.optional(),
+  providerOptions: ProviderOptionsSchema.optional(),
 });
 
 export const AgentDetailsSchema = z.object({
@@ -147,6 +253,7 @@ export const AgentConfigSchema = z.object({
 
 export type AgentConfig = z.infer<typeof AgentConfigSchema>;
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
+export type ReasoningConfig = z.infer<typeof ReasoningConfigSchema>;
 export type AgentDetails = z.infer<typeof AgentDetailsSchema>;
 export type LoopConfig = z.infer<typeof LoopConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;

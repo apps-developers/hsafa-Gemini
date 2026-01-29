@@ -4,18 +4,7 @@ import { Attachment } from "../../types/chat";
 import { AttachmentDisplay } from "../AttachmentDisplay";
 import { Pencil } from "lucide-react";
 import { IconWrapper } from "../IconWrapper";
-
-type ThemeColors = {
-  textColor: string;
-  mutedTextColor: string;
-  borderColor: string;
-  accentColor: string;
-  hoverBackground: string;
-  inputBackground: string;
-  cardBackground: string;
-  primaryColor: string;
-  backgroundColor: string;
-};
+import type { ThemeColors } from "../../utils/chat-theme";
 
 interface MessageListProps {
   chatMessages: any[];
