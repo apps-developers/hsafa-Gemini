@@ -1,37 +1,123 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Hsafa Logic - AI Agent Platform
 
-## Getting Started
+A distributed AI agent platform with persistent memory, multi-device tool execution, and a powerful React SDK.
 
-First, run the development server:
+## 🏗️ Project Structure
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+This is a **pnpm monorepo** with the following packages:
+
+```
+hsafa-logic/
+├── hsafa-gateway/        # Node.js server - Agent builder & runtime
+├── react-sdk/            # React SDK for building agent UIs
+├── vite-test-app/        # Vite test app for SDK development
+├── hsafa-docs/           # Platform documentation
+└── vercel-ai-sdk-docs/   # Vercel AI SDK documentation
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 📦 Packages
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **`hsafa-gateway`** - Node.js Express server that builds and runs agents from JSON configs. Supports distributed tool execution, streaming, and persistent memory.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **`react-sdk`** - React components and hooks for integrating AI agents into your app. Includes `HsafaChat` component with theming, custom tool UIs, and more.
 
-## Learn More
+- **`vite-test-app`** - Vite-powered test application for SDK development and testing.
 
-To learn more about Next.js, take a look at the following resources:
+- **`hsafa-docs`** - Comprehensive platform documentation including architecture guides and API references.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- **`vercel-ai-sdk-docs`** - Documentation for the Vercel AI SDK integration.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 🚀 Getting Started
 
-## Deploy on Vercel
+### Prerequisites
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Node.js 20+
+- pnpm 8+
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-# hsafa-logic
+### Installation
+
+```bash
+pnpm install
+```
+
+### Environment Setup
+
+Create a `.env` file in the root (or in `hsafa-gateway/`):
+
+```env
+OPENAI_API_KEY=your-key-here
+ANTHROPIC_API_KEY=your-key-here
+GOOGLE_GENERATIVE_AI_API_KEY=your-key-here
+XAI_API_KEY=your-key-here
+```
+
+### Development
+
+**Start everything:**
+```bash
+pnpm dev
+```
+
+This will start:
+- Gateway server on `http://localhost:3001`
+- Vite test app on `http://localhost:5173`
+
+**Or run individually:**
+
+```bash
+# Gateway server only
+pnpm dev:gateway
+
+# React SDK (watch mode)
+pnpm dev:sdk
+
+# Vite test app only
+pnpm dev:test
+```
+
+### Building
+
+```bash
+# Build all packages
+pnpm build
+
+# Build specific package
+pnpm build:gateway
+pnpm build:sdk
+pnpm build:test
+```
+
+## 📖 Architecture
+
+See [`hsafa-docs/idea-docs/11-agent-builder-server.mdx`](./hsafa-docs/idea-docs/11-agent-builder-server.mdx) for the complete platform architecture.
+
+### Key Concepts
+
+- **Agent Builder** - Create agents from JSON configs with model settings, tools, and MCP servers
+- **Distributed Runtime** - Agents run on the server with tools executing on any connected device
+- **Persistent Memory** - PostgreSQL for long-term storage, Redis for live streaming state
+- **Multi-client Support** - Web, mobile, Node.js clients via SSE + WebSockets
+
+## 🛠️ Tech Stack
+
+| Purpose          | Technology                |
+| ---------------- | ------------------------- |
+| AI Agent Brain   | Vercel AI SDK (Core)      |
+| Gateway Server   | Node.js + Express         |
+| React SDK        | React + TypeScript        |
+| Build Tool       | tsup / Vite               |
+| Package Manager  | pnpm                      |
+
+## 📚 Documentation
+
+- [Platform Architecture](./hsafa-docs/idea-docs/11-agent-builder-server.mdx)
+- [Integration Guide](./INTEGRATION_GUIDE.md)
+- [React SDK Docs](./react-sdk/DOCUMENTATION.md)
+
+## 🤝 Contributing
+
+This is a monorepo managed with pnpm workspaces. Each package has its own `README.md` with specific documentation.
+
+## 📄 License
+
+MIT

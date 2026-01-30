@@ -1,5 +1,9 @@
 packages:
-  - .
+  - hsafa-gateway
+  - react-sdk
+  - vite-test-app
+  - hsafa-docs
+  - vercel-ai-sdk-docs
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver

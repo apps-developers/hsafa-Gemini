@@ -1,0 +1,120 @@
+{
+  "name": "@hsafa/react-sdk",
+  "version": "0.6.4",
+  "description": "React SDK for integrating AI agents built with HSAFA AI Agent Studio",
+  "type": "module",
+  "files": [
+    "dist",
+    "examples",
+    "docs",
+    "DOCUMENTATION.md"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./index.css": "./dist/index.css",
+    "./dist/index.css": "./dist/index.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:ui": "vitest --ui",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "lint": "eslint src --ext .ts,.tsx",
+    "type-check": "tsc --noEmit",
+    "docs:api": "typedoc",
+    "docs:dev": "pnpm storybook",
+    "docs:build": "pnpm build-storybook && pnpm docs:api",
+    "prepublishOnly": "pnpm build && pnpm test",
+    "publish:npm": "npm publish --access public"
+  },
+  "peerDependencies": {
+    "@tabler/icons-react": ">=3",
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@storybook/addon-essentials": "^8.6.14",
+    "@storybook/addon-interactions": "^8.6.14",
+    "@storybook/addon-links": "^8.6.14",
+    "@storybook/react": "^8.6.14",
+    "@storybook/react-vite": "^8.6.14",
+    "@swc/core": "^1.3.0",
+    "@tabler/icons-react": "^3.21.0",
+    "@testing-library/jest-dom": "^6.1.5",
+    "@testing-library/react": "^14.1.2",
+    "@testing-library/user-event": "^14.5.1",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "@typescript-eslint/eslint-plugin": "^8.43.0",
+    "@typescript-eslint/parser": "^8.43.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^9.35.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^15.15.0",
+    "jsdom": "^23.0.1",
+    "postcss": "^8.4.32",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "storybook": "^8.6.14",
+    "tailwindcss": "^3.3.6",
+    "tsup": "^8.5.1",
+    "typedoc": "^0.28.12",
+    "typedoc-plugin-markdown": "^4.8.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.0",
+    "vitest": "^1.1.0"
+  },
+  "keywords": [
+    "react",
+    "ui",
+    "components",
+    "typescript",
+    "sdk",
+    "hsafa",
+    "chat",
+    "ai",
+    "frontend",
+    "library",
+    "hooks",
+    "tailwind",
+    "modern"
+  ],
+  "author": "Husam Abu Safa",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/husamabusafa/hsafa.git",
+    "directory": "react-sdk"
+  },
+  "homepage": "https://github.com/husamabusafa/hsafa/tree/main/react-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/husamabusafa/hsafa/issues"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "beta",
+    "@ant-design/x": "^2.1.0",
+    "@ant-design/x-markdown": "^2.1.0",
+    "ai": "beta",
+    "fast-json-patch": "^3.1.1",
+    "lucide-react": "^0.509.0",
+    "mermaid": "^11.12.0"
+  }
+}

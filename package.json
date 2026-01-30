@@ -2,39 +2,19 @@
   "name": "hsafa-logic",
   "version": "0.1.0",
   "private": true,
+  "description": "Hsafa AI Agent Platform - Distributed agent runtime with React SDK",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.15",
-    "@ai-sdk/google": "^3.0.10",
-    "@ai-sdk/mcp": "^1.0.14",
-    "@ai-sdk/openai": "^3.0.12",
-    "@ai-sdk/react": "^3.0.41",
-    "@ai-sdk/xai": "^3.0.26",
-    "@ant-design/x": "^2.1.0",
-    "@ant-design/x-markdown": "^2.1.0",
-    "@tabler/icons-react": "^3.21.0",
-    "ai": "^6.0.39",
-    "fast-json-patch": "^3.1.1",
-    "lucide-react": "^0.509.0",
-    "mermaid": "^11.12.0",
-    "next": "16.1.3",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
-    "zod": "^4.3.5"
+    "dev:gateway": "pnpm --filter @hsafa/gateway dev",
+    "dev:sdk": "pnpm --filter @hsafa/react-sdk dev",
+    "dev:test": "pnpm --filter @hsafa/vite-test-app dev",
+    "dev": "pnpm run dev:gateway & pnpm run dev:test",
+    "build:gateway": "pnpm --filter @hsafa/gateway build",
+    "build:sdk": "pnpm --filter @hsafa/react-sdk build",
+    "build:test": "pnpm --filter @hsafa/vite-test-app build",
+    "build": "pnpm -r build",
+    "clean": "pnpm -r exec rm -rf node_modules dist .next"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.1.3",
-    "tailwindcss": "^4",
     "typescript": "^5"
   }
 }
