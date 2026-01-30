@@ -1,0 +1,199 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RunStatus {
+  queued
+  running
+  waiting_tool
+  completed
+  failed
+  canceled
+}
+
+enum ToolExecutionTarget {
+  server
+  device
+  browser
+  external
+}
+
+enum ToolCallStatus {
+  requested
+  dispatched
+  completed
+  failed
+  expired
+}
+
+enum ToolResultSource {
+  server
+  device
+  browser
+}
+
+model Tenant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  agents  Agent[]
+  runs    Run[]
+  devices Device[]
+
+  @@unique([name])
+  @@map("tenants")
+}
+
+model Agent {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String?  @map("tenant_id") @db.Uuid
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant   Tenant?        @relation(fields: [tenantId], references: [id])
+  versions AgentVersion[]
+  runs     Run[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, createdAt])
+  @@map("agents")
+}
+
+model AgentVersion {
+  id         String   @id @default(uuid()) @db.Uuid
+  agentId    String   @map("agent_id") @db.Uuid
+  version    String
+  configJson Json     @map("config_json") @db.JsonB
+  configHash String   @map("config_hash")
+  metadata   Json?    @map("metadata") @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  agent Agent @relation(fields: [agentId], references: [id])
+  runs  Run[]
+
+  @@unique([agentId, version])
+  @@unique([agentId, configHash])
+  @@index([agentId, createdAt])
+  @@map("agent_versions")
+}
+
+model Run {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String?   @map("tenant_id") @db.Uuid
+  agentId        String    @map("agent_id") @db.Uuid
+  agentVersionId String    @map("agent_version_id") @db.Uuid
+  status         RunStatus
+  startedAt      DateTime? @map("started_at") @db.Timestamptz(6)
+  completedAt    DateTime? @map("completed_at") @db.Timestamptz(6)
+  errorMessage   String?   @map("error_message")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant       Tenant?       @relation(fields: [tenantId], references: [id])
+  agent        Agent         @relation(fields: [agentId], references: [id])
+  agentVersion AgentVersion  @relation(fields: [agentVersionId], references: [id])
+  events       RunEvent[]
+  toolCalls    ToolCall[]
+  toolResults  ToolResult[]
+
+  @@index([tenantId, createdAt])
+  @@index([status, updatedAt])
+  @@index([agentId, createdAt])
+  @@map("runs")
+}
+
+model RunEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  runId     String   @map("run_id") @db.Uuid
+  seq       BigInt
+  type      String
+  payload   Json     @db.JsonB
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  run Run @relation(fields: [runId], references: [id])
+
+  @@unique([runId, seq])
+  @@index([runId, createdAt])
+  @@map("run_events")
+}
+
+model ToolCall {
+  id             String              @id @default(uuid()) @db.Uuid
+  runId          String              @map("run_id") @db.Uuid
+  seq            BigInt
+  callId         String              @map("call_id")
+  toolName       String              @map("tool_name")
+  args           Json                @db.JsonB
+  executionTarget ToolExecutionTarget @map("execution_target")
+  targetDeviceId String?             @map("target_device_id") @db.Uuid
+  status         ToolCallStatus
+  requestedAt    DateTime            @default(now()) @map("requested_at") @db.Timestamptz(6)
+  completedAt    DateTime?           @map("completed_at") @db.Timestamptz(6)
+  errorMessage   String?             @map("error_message")
+
+  run          Run        @relation(fields: [runId], references: [id])
+  targetDevice Device?    @relation(fields: [targetDeviceId], references: [id])
+  result       ToolResult?
+
+  @@unique([runId, callId])
+  @@index([runId, seq])
+  @@index([targetDeviceId, status])
+  @@map("tool_calls")
+}
+
+model ToolResult {
+  id        String           @id @default(uuid()) @db.Uuid
+  runId     String           @map("run_id") @db.Uuid
+  callId    String           @map("call_id")
+  result    Json             @db.JsonB
+  source    ToolResultSource
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  run      Run      @relation(fields: [runId], references: [id])
+  toolCall ToolCall @relation(fields: [runId, callId], references: [runId, callId])
+
+  @@unique([runId, callId])
+  @@index([runId, createdAt])
+  @@map("tool_results")
+}
+
+model Device {
+  id           String   @id @default(uuid()) @db.Uuid
+  tenantId     String?  @map("tenant_id") @db.Uuid
+  deviceKey    String   @map("device_key")
+  displayName  String?  @map("display_name")
+  capabilities Json     @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastSeenAt   DateTime? @map("last_seen_at") @db.Timestamptz(6)
+
+  tenant   Tenant?         @relation(fields: [tenantId], references: [id])
+  sessions DeviceSession[]
+  toolCalls ToolCall[]
+
+  @@unique([tenantId, deviceKey])
+  @@index([tenantId, createdAt])
+  @@map("devices")
+}
+
+model DeviceSession {
+  id             String   @id @default(uuid()) @db.Uuid
+  deviceId       String   @map("device_id") @db.Uuid
+  connectedAt    DateTime @default(now()) @map("connected_at") @db.Timestamptz(6)
+  disconnectedAt DateTime? @map("disconnected_at") @db.Timestamptz(6)
+  connectionMeta Json     @default(dbgenerated("'{}'::jsonb")) @map("connection_meta") @db.JsonB
+
+  device Device @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId, connectedAt])
+  @@map("device_sessions")
+}

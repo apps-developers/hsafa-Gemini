@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { agentRouter } from './routes/agent.js';
 import { agentConfigRouter } from './routes/agent-config.js';
+import { prisma } from './lib/db.js';
+import { redis } from './lib/redis.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -16,9 +18,23 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'hsafa-gateway' });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Hsafa Gateway running on http://localhost:${PORT}`);
   console.log(`📡 API endpoints:`);
   console.log(`   POST http://localhost:${PORT}/api/agent`);
   console.log(`   GET  http://localhost:${PORT}/api/agent-config/:agentName`);
+  
+  try {
+    await prisma.$connect();
+    console.log('✅ Database connected');
+  } catch (error) {
+    console.error('❌ Database connection failed:', error);
+  }
+  
+  try {
+    await redis.ping();
+    console.log('✅ Redis connected');
+  } catch (error) {
+    console.error('❌ Redis connection failed:', error);
+  }
 });
