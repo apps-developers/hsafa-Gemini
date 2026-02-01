@@ -29,17 +29,22 @@ Users send agent configs:
 
 ```json
 {
-  "name": "research-agent",
-  "model": "gpt-5",
-  "systemPrompt": "...",
-  "tools": [...]
+  "version": "1.0",
+  "agent": {
+    "name": "research-agent",
+    "system": "..."
+  },
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4.1-mini"
+  },
+  "tools": []
 }
 ```
 
 You:
 
 * Store config in **PostgreSQL**
-* Cache hot agents in **Redis or memory**
 * Reuse config when runs start
 
 ---
@@ -157,8 +162,8 @@ This allows:
 While model streams:
 
 ```
-XADD run:123:stream chunk "Hello"
-XADD run:123:stream chunk " world"
+XADD run:123:stream * type "text.delta" ts "2026-01-30T12:00:00.000Z" payload "{\"delta\":\"Hello\"}"
+XADD run:123:stream * type "text.delta" ts "2026-01-30T12:00:00.000Z" payload "{\"delta\":\" world\"}"
 ```
 
 ### Client → Server (SSE)
@@ -197,7 +202,7 @@ Agents can call tools that run:
 
 ### 1️⃣ Agent requests tool
 
-SDK emits a tool call → you intercept
+Runtime emits a tool call → you persist + broadcast
 
 You store event and publish:
 
@@ -218,17 +223,31 @@ Saved in:
 
 ### 2️⃣ Target Client Executes Tool
 
-Client connected via WebSocket receives the request, runs the tool locally, and sends back:
+Any client watching the run stream can execute the tool and submit the result back to the gateway.
+
+Tool results can be submitted via HTTP:
+
+```json
+POST /api/runs/:runId/tool-results
+{
+  "callId": "abc123",
+  "result": {"...": "..."},
+  "source": "device"
+}
+```
+
+Or via WebSocket (device runtime):
 
 ```json
 {
   "type": "tool.result",
-  "toolCallId": "abc123",
-  "result": {...}
+  "data": {
+    "runId": "...",
+    "callId": "abc123",
+    "result": {"...": "..."}
+  }
 }
 ```
-
----
 
 ### 3️⃣ Server Resumes Agent
 
@@ -271,7 +290,7 @@ SDK = **decision engine only**
 
 # 🗄️ PostgreSQL Schema (Current)
 
-This is a recommended baseline schema that supports:
+This describes the current schema as implemented in `hsafa-gateway/prisma/schema.prisma`:
 
 - Persistent agent configs + versioning
 - Persistent run state + resume
@@ -285,13 +304,13 @@ This is a recommended baseline schema that supports:
 - `jsonb` for agent config and tool payloads
 - `timestamptz` for all timestamps
 
-## Tables (Baseline)
+## Tables
 
 ### `agents`
 
 - **Purpose**: logical agent identity (stable).
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `name text not null`
@@ -307,7 +326,7 @@ Indexes/constraints:
 
 - **Purpose**: immutable snapshots of agent configs.
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `agent_id uuid not null fk -> agents(id)`
@@ -326,7 +345,7 @@ Indexes/constraints:
 
 - **Purpose**: a single execution instance.
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `agent_id uuid not null`
@@ -347,7 +366,7 @@ Indexes:
 
 - **Purpose**: canonical event log for UI + recovery.
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `run_id uuid not null fk -> runs(id)`
@@ -365,14 +384,16 @@ Indexes/constraints:
 
 - **Purpose**: tool invocation state.
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `run_id uuid not null fk -> runs(id)`
+- `seq bigint not null` (step index)
 - `call_id text not null` (provided by runtime; unique per run)
 - `tool_name text not null`
 - `args jsonb not null`
 - `execution_target text not null` (`server|device|browser|external`)
+- `target_device_id uuid null`
 - `status text not null` (`requested|dispatched|completed|failed|expired`)
 - `requested_at timestamptz not null default now()`
 - `completed_at timestamptz null`
@@ -381,13 +402,14 @@ Recommended columns:
 Indexes/constraints:
 
 - Unique: `(run_id, call_id)`
-- Index: `(execution_target, status)`
+- Index: `(run_id, seq)`
+- Index: `(target_device_id, status)`
 
 ### `tool_results`
 
 - **Purpose**: tool result storage.
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `run_id uuid not null fk -> runs(id)`
@@ -404,12 +426,14 @@ Indexes/constraints:
 
 - **Purpose**: device registry.
 
-Recommended columns:
+Columns:
 
 - `id uuid pk`
 - `device_key text not null` (unique identifier)
-- `capabilities jsonb not null` (list of supported tools)
-- `last_seen_at timestamptz null` (timestamp of last heartbeat)
+- `display_name text null`
+- `capabilities jsonb not null`
+- `created_at timestamptz not null default now()`
+- `last_seen_at timestamptz null`
 
 Indexes/constraints:
 
@@ -423,14 +447,12 @@ Redis is for:
 
 - Stream replay (SSE reconnect)
 - Fast fanout to many watchers
-- Fast routing of tool requests to devices
-- Ephemeral coordination (locks, heartbeats, transient state)
+- Device presence (online/offline)
 
 ## Key Naming Convention
 
 - `run:{runId}:stream` (Redis Stream)
 - `run:{runId}:notify` (Pub/Sub)
-- `device:{deviceId}:inbox` (Redis Stream or Pub/Sub channel)
 - `device:{deviceId}:presence` (String or Hash, TTL)
 
 ## Redis Streams
@@ -449,7 +471,7 @@ Entry format (recommended):
 Example:
 
 ```
-XADD run:123:stream * type "assistant.delta" ts "2026-01-30T12:00:00.000Z" payload "{...}"
+XADD run:123:stream * type "text.delta" ts "2026-01-30T12:00:00.000Z" payload "{\"delta\":\"Hello\"}"
 ```
 
 Retention:
@@ -476,9 +498,11 @@ Gateway SSE events use a single envelope:
 
 - `run.created`
 - `run.started`
+- `run.waiting_tool`
 - `text.delta`
 - `message.user`
 - `message.assistant`
+- `message.tool`
 - `tool.call`
 - `tool.result`
 - `run.completed`
@@ -499,7 +523,7 @@ Server behavior:
 ```
 id: <redisStreamId>
 event: hsafa
-data: {"runId":...,"seq":...,"type":...,"ts":...,"data":...}
+data: {"id":"<redisStreamId>","type":"text.delta","ts":"...","data":{}}
 
 ```
 

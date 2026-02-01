@@ -111,7 +111,7 @@ export function HsafaChat({
   };
 
   const resolvedColors = themeColors;
-  const t = (key: string) => {
+  const t = useCallback((key: string) => {
     const en: Record<string, string> = {
       'header.new': 'New',
       'header.history': 'History',
@@ -200,7 +200,7 @@ export function HsafaChat({
 
     const dict = isArabic ? ar : en;
     return dict[key] || en[key] || key;
-  };
+  }, [emptyStateMessage, isArabic, placeholder, title]);
 
   const configuredAgentId = typeof agentId === 'string' ? agentId : '';
   const hasValidGatewayConfig = Boolean(configuredAgentId && effectiveGatewayUrl);
@@ -424,6 +424,17 @@ export function HsafaChat({
   useEffect(() => {
     try { localStorage.setItem(HISTORY_OPEN_KEY, String(historyOpen)); } catch { /* ignore */ }
   }, [HISTORY_OPEN_KEY, historyOpen]);
+
+  // Re-hydrate historyOpen if the storage key changes (e.g. agentId becomes available after first render)
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem(HISTORY_OPEN_KEY);
+      if (v === null) return;
+      setHistoryOpen(v === 'true');
+    } catch {
+      // ignore
+    }
+  }, [HISTORY_OPEN_KEY]);
 
   // Reflect streaming/open state via provider
   useEffect(() => {

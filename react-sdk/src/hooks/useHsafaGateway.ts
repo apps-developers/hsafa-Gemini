@@ -120,6 +120,18 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
   const currentReasoningRef = useRef<string>('');
   const draftAssistantIdRef = useRef<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  const RECONNECT_BASE_DELAY = 1000;
+
+  const hydrateStateRef = useRef<{
+    active: boolean;
+    runId: string | null;
+    sseCutoffIso: string | null;
+  }>({ active: false, runId: null, sseCutoffIso: null });
+  const bufferedSseEventsRef = useRef<StreamEvent[]>([]);
 
   useEffect(() => {
     if (providedRunId) {
@@ -221,7 +233,8 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
 
   // Add tool result (public API for UI tools)
   const addToolResult = useCallback(async (payload: unknown) => {
-    if (!runId) return;
+    const currentRunId = attachedRunIdRef.current;
+    if (!currentRunId) return;
 
     if (typeof payload === 'string') {
       return;
@@ -233,8 +246,8 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     if (!toolCallId) return;
 
     setPendingToolCalls(prev => prev.filter(tc => tc.id !== toolCallId));
-    await sendToolResult(runId, toolCallId, result);
-  }, [runId, sendToolResult]);
+    await sendToolResult(currentRunId, toolCallId, result);
+  }, [sendToolResult]);
 
   // Process SSE event
   const processEvent = useCallback((event: StreamEvent) => {
@@ -249,6 +262,12 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
 
       case 'run.waiting_tool':
         setStatus('waiting_tool');
+        break;
+
+      case 'reasoning.start':
+        setStatus('streaming');
+        setIsStreaming(true);
+        currentReasoningRef.current = '';
         break;
 
       case 'reasoning.delta': {
@@ -295,6 +314,26 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
         break;
       }
 
+      case 'step.start':
+      case 'step.finish':
+      case 'stream.finish':
+      case 'tool.input.start':
+      case 'tool.input.delta':
+        // These are informational events - we don't need to update UI for them
+        // but we acknowledge them to prevent unknown event warnings
+        break;
+
+      case 'agent.build.error': {
+        const d = data as Record<string, unknown> | null | undefined;
+        const errorMsg = typeof d?.error === 'string' ? d.error : 'Agent build failed';
+        const err = new Error(errorMsg);
+        setError(err);
+        setStatus('error');
+        setIsStreaming(false);
+        onError?.(err);
+        break;
+      }
+
       case 'message.user':
       case 'message.assistant':
       case 'message.tool': {
@@ -303,82 +342,62 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
         if (!msg || typeof msg !== 'object' || typeof msg.id !== 'string') break;
 
         // If we have a draft assistant and this is the final message.assistant,
-        // finalize the draft: keep streamed text, and merge tool-call parts if present.
+        // finalize the draft by merging streamed content with final message
         if (type === 'message.assistant' && draftAssistantIdRef.current) {
           const draftId = draftAssistantIdRef.current;
           draftAssistantIdRef.current = null;
 
-          setMessages(prev => prev.map(m => {
-            if (m.id !== draftId) return m;
-
-            const draftParts = Array.isArray(m.parts) ? m.parts : [];
-            const finalParts = Array.isArray(msg.parts) ? msg.parts : [];
-
-            const draftReasoning = draftParts.find(p => {
-              const t = (p as { type?: unknown }).type;
-              return typeof t === 'string' && t === 'reasoning';
-            });
-            const draftText = draftParts.find(p => {
-              const t = (p as { type?: unknown }).type;
-              return typeof t === 'string' && t === 'text';
-            });
-
-            const hasToolCall = finalParts.some(p => {
-              const t = (p as { type?: unknown }).type;
-              return typeof t === 'string' && t === 'tool-call';
-            });
-            const hasText = finalParts.some(p => {
-              const t = (p as { type?: unknown }).type;
-              return typeof t === 'string' && t === 'text';
-            });
-
-            let parts: GatewayMessagePart[] = finalParts;
-
-            if (hasToolCall) {
-              const merged: GatewayMessagePart[] = [];
-              const reasoningText = draftReasoning && typeof (draftReasoning as Record<string, unknown>).text === 'string'
-                ? ((draftReasoning as Record<string, unknown>).text as string)
-                : '';
-              if (reasoningText) merged.push({ type: 'reasoning', text: reasoningText });
-
-              const draftTextValue = draftText && typeof (draftText as Record<string, unknown>).text === 'string'
-                ? ((draftText as Record<string, unknown>).text as string)
-                : '';
-              const textToUse = currentTextRef.current || draftTextValue;
-              if (textToUse) merged.push({ type: 'text', text: textToUse });
-
-              merged.push(...finalParts.filter(p => {
-                const t = (p as { type?: unknown }).type;
-                return t !== 'text' && t !== 'reasoning';
-              }));
-
-              parts = merged;
-            } else if (hasText && currentTextRef.current) {
-              // Prefer the accumulated streamed text
-              parts = finalParts.map(p => {
-                const t = (p as { type?: unknown }).type;
-                if (t === 'text') return { ...p, text: currentTextRef.current };
-                return p;
-              });
-              const reasoningText = draftReasoning && typeof (draftReasoning as Record<string, unknown>).text === 'string'
-                ? ((draftReasoning as Record<string, unknown>).text as string)
-                : '';
-              if (reasoningText && !parts.some(p => {
-                const t = (p as { type?: unknown }).type;
-                return typeof t === 'string' && t === 'reasoning';
-              })) {
-                parts = [{ type: 'reasoning', text: reasoningText }, ...parts];
-              }
-            } else if (finalParts.length === 0) {
-              // Nothing in final: keep draft parts
-              parts = draftParts;
+          setMessages(prev => {
+            const draftIdx = prev.findIndex(m => m.id === draftId);
+            if (draftIdx === -1) {
+              // Draft not found, just add the final message if not duplicate
+              if (prev.some(m => m.id === msg.id)) return prev;
+              return [...prev, msg];
             }
 
-            return { ...m, id: msg.id, parts };
-          }));
+            const draft = prev[draftIdx];
+            const draftParts = Array.isArray(draft.parts) ? draft.parts : [];
+            const finalParts = Array.isArray(msg.parts) ? msg.parts : [];
 
-          currentTextRef.current = '';
-          currentReasoningRef.current = '';
+            // Build merged parts: prefer streamed content over final for text/reasoning
+            const mergedParts: GatewayMessagePart[] = [];
+
+            // Add reasoning from draft if we have streamed reasoning
+            const streamedReasoning = currentReasoningRef.current;
+            const draftReasoningPart = draftParts.find(p => p.type === 'reasoning');
+            if (streamedReasoning || draftReasoningPart) {
+              const reasoningText = streamedReasoning || (draftReasoningPart as { text?: string })?.text || '';
+              if (reasoningText) {
+                mergedParts.push({ type: 'reasoning', text: reasoningText });
+              }
+            }
+
+            // Add text from draft if we have streamed text
+            const streamedText = currentTextRef.current;
+            const draftTextPart = draftParts.find(p => p.type === 'text');
+            const finalTextPart = finalParts.find(p => p.type === 'text');
+            const textToUse = streamedText || (draftTextPart as { text?: string })?.text || (finalTextPart as { text?: string })?.text || '';
+            if (textToUse) {
+              mergedParts.push({ type: 'text', text: textToUse });
+            }
+
+            // Add any tool-call parts from final message
+            for (const part of finalParts) {
+              if (part.type === 'tool-call') {
+                mergedParts.push(part);
+              }
+            }
+
+            // Replace draft with finalized message
+            const updated = [...prev];
+            updated[draftIdx] = { ...draft, id: msg.id, parts: mergedParts };
+
+            // Reset refs
+            currentTextRef.current = '';
+            currentReasoningRef.current = '';
+
+            return updated;
+          });
           break;
         }
 
@@ -417,9 +436,9 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
           } else if (tools[toolCall.toolName]) {
             // Auto-execute browser tool
             executeBrowserTool(toolCall).then(result => {
-              if (runId) {
-                sendToolResult(runId, toolCall.id, result);
-              }
+              const currentRunId = attachedRunIdRef.current;
+              if (!currentRunId) return;
+              sendToolResult(currentRunId, toolCall.id, result);
             });
           }
         }
@@ -464,11 +483,25 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     }
   }, [tools, onToolCall, addToolResult, executeBrowserTool, sendToolResult, runId, onComplete, onError, ensureDraftAssistant]);
 
-  // Start SSE stream for a run
-  const startStream = useCallback((currentRunId: string) => {
+  // Clear reconnect timeout
+  const clearReconnectTimeout = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Start SSE stream for a run with reconnection support
+  const startStream = useCallback((currentRunId: string, isReconnect = false) => {
     // Close existing stream
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    clearReconnectTimeout();
+
+    if (!isReconnect) {
+      reconnectAttemptsRef.current = 0;
     }
 
     const eventSource = new EventSource(`${gatewayUrl}/api/runs/${currentRunId}/stream`);
@@ -476,22 +509,67 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     attachedRunIdRef.current = currentRunId;
     const streamRunId = currentRunId;
 
+    eventSource.onopen = () => {
+      // Reset reconnect attempts on successful connection
+      reconnectAttemptsRef.current = 0;
+
+      if (hydrateStateRef.current.active && hydrateStateRef.current.runId === streamRunId) {
+        hydrateStateRef.current.sseCutoffIso = new Date().toISOString();
+      }
+    };
+
     eventSource.addEventListener('hsafa', (e) => {
       try {
         if (attachedRunIdRef.current !== streamRunId) return;
         const event: StreamEvent = JSON.parse(e.data);
+        if (hydrateStateRef.current.active && hydrateStateRef.current.runId === streamRunId) {
+          bufferedSseEventsRef.current.push(event);
+          return;
+        }
         processEvent(event);
       } catch (err) {
         console.error('Failed to parse event:', err);
       }
     });
 
-    eventSource.onerror = (err) => {
-      console.error('SSE error:', err);
+    eventSource.onerror = () => {
       eventSource.close();
-      setIsStreaming(false);
+      eventSourceRef.current = null;
+
+      // Only attempt reconnection if we're still attached to this run
+      if (attachedRunIdRef.current !== streamRunId) return;
+
+      // Attempt reconnection with exponential backoff
+      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        const delay = RECONNECT_BASE_DELAY * Math.pow(2, reconnectAttemptsRef.current);
+        reconnectAttemptsRef.current++;
+        console.log(`SSE connection lost, reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
+        
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (attachedRunIdRef.current === streamRunId) {
+            startStream(streamRunId, true);
+          }
+        }, delay);
+      } else {
+        console.error('SSE reconnection failed after max attempts');
+        setIsStreaming(false);
+        setStatus(prev => prev === 'streaming' ? 'error' : prev);
+        setError(new Error('Connection lost. Please refresh to reconnect.'));
+      }
     };
-  }, [gatewayUrl, processEvent]);
+  }, [gatewayUrl, processEvent, clearReconnectTimeout]);
+
+  // Load run status from server
+  const loadRunStatus = useCallback(async (targetRunId: string): Promise<{ status: string } | null> => {
+    try {
+      const response = await fetch(`${gatewayUrl}/api/runs/${targetRunId}`);
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data?.run ? { status: data.run.status } : null;
+    } catch {
+      return null;
+    }
+  }, [gatewayUrl]);
 
   // Load messages for a run (authoritative source of truth)
   const loadRunMessages = useCallback(async (targetRunId: string): Promise<GatewayMessage[]> => {
@@ -543,6 +621,12 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
       }
       // If we deleted the current run, reset state
       if (targetRunId === runId) {
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+        setIsStreaming(false);
+        setStatus('idle');
         setMessages([]);
         setRunId(null);
         attachedRunIdRef.current = null;
@@ -565,17 +649,43 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-    setIsStreaming(false);
+    clearReconnectTimeout();
     
     // Clear previous messages when attaching to a new run
     setMessages([]);
     setRunId(newRunId);
     attachedRunIdRef.current = newRunId;
 
+    // Fetch the run status from server to determine if we should be streaming
+    const runInfo = await loadRunStatus(newRunId);
+    const serverStatus = runInfo?.status || 'unknown';
+    
+    // Set initial state based on server status
+    const isActiveRun = serverStatus === 'running' || serverStatus === 'streaming' || serverStatus === 'waiting_tool';
+    if (isActiveRun) {
+      setIsStreaming(true);
+      setStatus(serverStatus === 'waiting_tool' ? 'waiting_tool' : 'streaming');
+    } else if (serverStatus === 'completed') {
+      setIsStreaming(false);
+      setStatus('completed');
+    } else if (serverStatus === 'failed' || serverStatus === 'error') {
+      setIsStreaming(false);
+      setStatus('error');
+    } else {
+      setIsStreaming(false);
+      setStatus('idle');
+    }
+
     // Reset streaming/draft refs for this run
     currentTextRef.current = '';
     currentReasoningRef.current = '';
     draftAssistantIdRef.current = null;
+
+    // Start SSE immediately and buffer events until we've hydrated history.
+    // This prevents missing events that arrive during the hydration window.
+    hydrateStateRef.current = { active: true, runId: newRunId, sseCutoffIso: null };
+    bufferedSseEventsRef.current = [];
+    startStream(newRunId);
     
     // Load existing messages for this run from PostgreSQL
     const history = await loadRunMessages(newRunId);
@@ -597,8 +707,17 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
 
       if (!hasAssistantAfterLastUser) {
         const events = await loadRunEvents(newRunId);
+        const cutoffIso = hydrateStateRef.current.runId === newRunId
+          ? (hydrateStateRef.current.sseCutoffIso || new Date().toISOString())
+          : new Date().toISOString();
+
+        // Only replay events strictly before SSE cutoff.
+        // Anything after the cutoff will be delivered by SSE and is buffered until hydration finishes.
         for (const evt of events) {
           if (attachedRunIdRef.current !== newRunId) return;
+
+          if (typeof evt.ts === 'string' && evt.ts >= cutoffIso) continue;
+
           if (evt.type === 'text.delta' || evt.type === 'reasoning.delta' || evt.type === 'tool.call' || evt.type === 'tool.result' || evt.type === 'run.completed' || evt.type === 'run.failed' || evt.type === 'stream.error') {
             processEvent(evt);
           }
@@ -608,9 +727,24 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
       // ignore
     }
 
-    // Start streaming live updates
-    startStream(newRunId);
-  }, [startStream, loadRunMessages, loadRunEvents, processEvent]);
+    // Flush buffered SSE events now that hydration is complete.
+    // We also drop any buffered events before the SSE cutoff since those were covered by replay.
+    if (hydrateStateRef.current.runId === newRunId) {
+      const cutoffIso = hydrateStateRef.current.sseCutoffIso || new Date().toISOString();
+      const buffered = bufferedSseEventsRef.current;
+      bufferedSseEventsRef.current = [];
+      hydrateStateRef.current = { active: false, runId: null, sseCutoffIso: null };
+
+      for (const evt of buffered) {
+        if (attachedRunIdRef.current !== newRunId) return;
+        if (typeof evt.ts === 'string' && evt.ts < cutoffIso) continue;
+        processEvent(evt);
+      }
+    } else {
+      hydrateStateRef.current = { active: false, runId: null, sseCutoffIso: null };
+      bufferedSseEventsRef.current = [];
+    }
+  }, [startStream, loadRunMessages, loadRunEvents, processEvent, loadRunStatus, clearReconnectTimeout]);
 
   useEffect(() => {
     if (!providedRunId) return;
@@ -695,6 +829,13 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     draftAssistantIdRef.current = null;
     ensureDraftAssistant();
 
+    // Create abort controller for this request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
       setIsStreaming(true);
       setStatus('running');
@@ -708,12 +849,17 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
           senderId: senderId ?? null,
           senderName: senderName ?? null,
         }),
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
         throw new Error(`Failed to send message: ${response.statusText}`);
       }
     } catch (err) {
+      // Ignore abort errors
+      if (err instanceof Error && err.name === 'AbortError') {
+        return;
+      }
       const error = err instanceof Error ? err : new Error(String(err));
       setError(error);
       setStatus('error');
@@ -724,13 +870,21 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
 
   // Stop current run
   const stop = useCallback(() => {
+    // Cancel any pending fetch operations
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    // Close SSE stream
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    // Clear reconnect timeout
+    clearReconnectTimeout();
     setIsStreaming(false);
     setStatus('idle');
-  }, []);
+  }, [clearReconnectTimeout]);
 
   // Reset
   const reset = useCallback(() => {
@@ -743,6 +897,9 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     currentReasoningRef.current = '';
     draftAssistantIdRef.current = null;
     attachedRunIdRef.current = null;
+    reconnectAttemptsRef.current = 0;
+    hydrateStateRef.current = { active: false, runId: null, sseCutoffIso: null };
+    bufferedSseEventsRef.current = [];
   }, [stop]);
 
   // Cleanup on unmount
@@ -750,6 +907,15 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
     };
   }, []);
