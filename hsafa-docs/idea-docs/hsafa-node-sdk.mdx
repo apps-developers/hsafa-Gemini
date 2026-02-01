@@ -1,0 +1,389 @@
+---
+title: HSAFA Backend (Node.js) SDK
+description: Specification for a Node.js SDK to run agents via Hsafa Gateway, stream runs, and fully support tool-calling (server + distributed).
+---
+
+# Goal
+
+Build a **backend (Node.js) SDK** that lets you:
+
+- Call the Hsafa Gateway APIs from any Node backend/service.
+- Start and manage **runs** (create, append messages, stream events, resume).
+- Take full advantage of your agent’s **tool calling**:
+  - Tools executed by the gateway (server tools).
+  - Tools executed by the Node app itself (distributed tools).
+
+This SDK should be:
+
+- **Simple by default** (a few high-level primitives).
+- **Powerful/extensible** (low-level access to events + tool dispatch + custom transports).
+
+---
+
+# Where this fits in your architecture
+
+Your gateway already implements the core “run orchestration”:
+
+- `POST /api/agents` stores agent config + creates versions.
+- `POST /api/runs` creates a run, optionally starts execution.
+- `GET /api/runs/:runId/stream` streams canonical run events (SSE) backed by Redis Streams.
+- `POST /api/runs/:runId/tool-results` submits a tool result and resumes the run if needed.
+- `WS /devices/connect` supports device registration and receiving tool results.
+
+The Node SDK is the **client-side control plane + optional tool runtime**.
+
+---
+
+# Core concepts (aligned with current gateway)
+
+## Agents + Versions
+
+- **Agent**: logical identity.
+- **Agent Version**: immutable snapshot of `configJson`.
+
+SDK responsibility:
+
+- Publish configs (idempotent via config hash) and get back `agentId` + `agentVersionId`.
+
+## Runs
+
+A run is a single execution of an agent version.
+
+Gateway run states (current):
+
+- `queued`
+- `running`
+- `waiting_tool`
+- `completed`
+- `failed`
+
+SDK responsibility:
+
+- Start runs.
+- Append messages.
+- Stream events (and reconnect via `Last-Event-ID` / `?since=`).
+
+## Events
+
+The gateway emits events like:
+
+- `run.created`, `run.started`, `run.waiting_tool`, `run.completed`, `run.failed`
+- `text.delta`
+- `tool.call`, `tool.result`
+- `message.user`, `message.assistant`, `message.tool`
+
+SDK responsibility:
+
+- Provide an ergonomic typed event stream (async iterator + optional callbacks).
+
+## Tools
+
+Two independent axes exist:
+
+- **`executionType`**: what the gateway does when the tool runs.
+  - `basic`, `request`, `compute`, `waiting`, `ai-agent`, `image-generator`
+- **`executionTarget`**: where the tool is executed.
+  - `server` (default)
+  - `device`
+  - `browser`
+  - `external`
+
+Gateway behavior today:
+
+- If a tool call is `executionTarget !== 'server'`, the run transitions to `waiting_tool` and stops the current execution loop.
+- When a tool result arrives via `POST /api/runs/:runId/tool-results`, the gateway resumes the run.
+
+---
+
+# SDK shape (recommended)
+
+Publish as **TypeScript-first** packages:
+
+- `@hsafa/node-sdk`
+  - Pure Node client + SSE event parser
+  - Optional “tool worker” utilities to execute distributed tools in Node
+
+Optional future split (if you want maximum clarity):
+
+- `@hsafa/gateway-client` (only HTTP + SSE)
+- `@hsafa/device-runtime` (tool worker + WebSocket helpers)
+
+---
+
+# Public API (high-level)
+
+## 1) Gateway client
+
+```ts
+import { createHsafaClient } from '@hsafa/node-sdk';
+
+const hsafa = createHsafaClient({
+  baseUrl: 'http://localhost:3001',
+  // apiKey: process.env.HSAFA_API_KEY, // planned
+});
+```
+
+Recommended minimal modules:
+
+- `hsafa.agents.*`
+- `hsafa.runs.*`
+
+### Agents
+
+- `hsafa.agents.upsert({ name?, config, version?, metadata? })`
+  - Calls `POST /api/agents`
+  - Returns `{ agentId, agentVersionId, configHash, created }`
+
+### Runs
+
+- `hsafa.runs.create({ agentId, agentVersionId?, initialMessages?, metadata? })`
+  - Calls `POST /api/runs`
+  - Returns `{ runId, streamUrl, status }`
+
+- `hsafa.runs.appendMessage(runId, { message, senderId?, senderName? })`
+  - Calls `POST /api/runs/:runId/messages`
+
+- `hsafa.runs.get(runId)`
+  - Calls `GET /api/runs/:runId`
+
+- `hsafa.runs.events(runId)`
+  - Calls `GET /api/runs/:runId/events`
+
+- `hsafa.runs.delete(runId)`
+  - Calls `DELETE /api/runs/:runId`
+
+### Streaming
+
+- `hsafa.runs.stream(runId, { since? })` → `AsyncIterable<RunEvent>`
+  - Connects to `GET /api/runs/:runId/stream`
+  - Supports reconnection:
+    - pass `since` (Redis stream id)
+    - or use `Last-Event-ID`
+
+### Tool results
+
+- `hsafa.runs.postToolResult(runId, { callId, result, source? })`
+  - Calls `POST /api/runs/:runId/tool-results`
+
+---
+
+## 2) High-level “run helper”
+
+Most users want: “send a message and stream output”.
+
+```ts
+const run = await hsafa.run({
+  agentId,
+  message: 'Summarize the latest run architecture.',
+});
+
+for await (const evt of run.events()) {
+  if (evt.type === 'text.delta') process.stdout.write(evt.data.delta);
+}
+```
+
+Recommended ergonomic wrapper:
+
+- `hsafa.run({ agentId, agentVersionId?, message, metadata? })`
+  - Creates the run (or reuses an existing runId if provided)
+  - Appends the user message
+  - Returns a `RunHandle`
+
+`RunHandle` should expose:
+
+- `run.id`
+- `run.events({ since? })`
+- `run.waitForFinal()`
+- `run.cancel()` (planned)
+
+---
+
+# Tool calling in Node (taking full advantage)
+
+There are two ways a Node backend can participate in tool calling:
+
+## A) Node as a distributed tool executor (works with today’s APIs)
+
+Because `tool.call` events are streamed over SSE, a Node process can:
+
+1. Subscribe to the run stream.
+2. When it sees a `tool.call` event, decide if it should execute it.
+3. Execute the local tool function.
+4. Submit `POST /api/runs/:runId/tool-results`.
+
+This requires **no Redis access** and **no new gateway endpoints**.
+
+### Proposed helper: `createToolWorker()`
+
+```ts
+const worker = hsafa.createToolWorker({
+  tools: {
+    // toolName -> handler
+    scanInternalDb: async (args) => {
+      return { rows: await myDb.query(args.sql) };
+    },
+  },
+});
+
+await worker.attachToRun({
+  runId,
+  // optional routing rule:
+  canExecute: ({ toolName, executionTarget }) => executionTarget === 'device',
+});
+```
+
+Recommended behaviors:
+
+- Each tool handler receives:
+  - `args`
+  - `context` (runId, toolCallId, agentId, etc. if available)
+- Built-in protections:
+  - timeouts
+  - max concurrency
+  - retries (optional)
+  - structured error result
+
+### Important note about targeting
+
+Today, `executionTarget` exists, but there is not yet a full “device targeting” routing layer in the gateway. To keep the system flexible:
+
+- The SDK should allow your backend to decide “which tool calls to execute” using a predicate (`canExecute`).
+- Later, when the gateway adds “targetDeviceId” and dispatch, the SDK can switch to a push-based approach.
+
+---
+
+## B) Node as a *device* (WebSocket runtime) (partially implemented)
+
+Gateway currently supports:
+
+- `device.register` over `WS /devices/connect`
+- `tool.result` over WebSocket
+
+Gateway also has a `tool.call.request` message shape and an inbox stream, but **tool call dispatch is not yet wired into run execution**.
+
+### Proposed helper: `createDeviceClient()`
+
+```ts
+const device = await hsafa.createDeviceClient({
+  wsUrl: 'ws://localhost:3001/devices/connect',
+  deviceKey: 'billing-service-prod',
+  displayName: 'Billing Service',
+  capabilities: { executionTarget: 'device' },
+});
+
+device.onToolCall(async ({ runId, callId, toolName, args }) => {
+  const result = await tools[toolName](args);
+  await device.sendToolResult({ runId, callId, result });
+});
+```
+
+This becomes the best path once the gateway dispatches tool calls directly to devices.
+
+---
+
+# How the SDK “runs the agent”
+
+In your platform, **the gateway runs the agent**.
+
+So the Node SDK “runs the agent” by orchestrating a run:
+
+1. Ensure the agent config is published (`POST /api/agents`).
+2. Create a run (`POST /api/runs`).
+3. Append a user message (`POST /api/runs/:runId/messages`) or provide `initialMessages` when creating.
+4. Stream events (`GET /api/runs/:runId/stream`).
+5. If a tool call requires distributed execution, submit tool result (`POST /api/runs/:runId/tool-results`) so the gateway can resume.
+
+This is the key design advantage:
+
+- The SDK never needs to re-implement `ToolLoopAgent`.
+- Your run history + streaming are durable (Postgres + Redis).
+- Any number of clients can attach to the same run.
+
+---
+
+# Keep it simple but allow “do anything”
+
+Use a two-layer design:
+
+## Layer 1: Minimal, stable primitives
+
+- `agents.upsert()`
+- `runs.create()`
+- `runs.appendMessage()`
+- `runs.stream()`
+- `runs.postToolResult()`
+
+This covers almost every integration.
+
+## Layer 2: Power features as add-ons
+
+- Tool worker (execute tool calls in Node)
+- Device client (WebSocket)
+- Event helpers:
+  - `streamTextDeltas()`
+  - `collectFinalText()`
+  - `waitFor(type)`
+- Observability hooks:
+  - `onEvent`
+  - `onRetry`
+  - `onError`
+
+---
+
+# Type safety and compatibility
+
+The SDK should reuse your gateway shapes:
+
+- `AgentConfig` (same JSON structure used by the gateway)
+- Tool types: `executionType` + `execution` + `executionTarget`
+- Run stream event envelope:
+
+```ts
+type RunStreamEvent = {
+  id: string;        // Redis stream entry id (e.g. "1738...-0")
+  type: string;      // e.g. "text.delta", "tool.call"
+  ts: string;        // ISO timestamp
+  data: unknown;     // payload
+};
+```
+
+This ensures:
+
+- The SDK doesn’t invent new abstractions that diverge from your platform.
+
+---
+
+# Security recommendations (SDK-level)
+
+- **Do not** encourage embedding secrets in agent configs.
+- Prefer passing secrets via:
+  - environment variables interpolated at build time (`interpolateConfigEnvVars`)
+  - per-request variables when calling tools (for `request` tools)
+
+Planned:
+
+- API key / JWT auth support in the SDK client.
+
+---
+
+# Roadmap (recommended next gateway additions)
+
+These gateway additions will make the Node SDK even stronger:
+
+- `POST /api/runs/:runId/cancel`
+- Tool call routing:
+  - store `targetDeviceId`
+  - dispatch `tool.call.request` to devices automatically
+- A “device inbox” endpoint (no Redis exposure):
+  - `GET /api/devices/:deviceId/inbox/stream` (SSE)
+- First-class SDK auth:
+  - `Authorization: Bearer <token>`
+
+---
+
+# Next step
+
+If you want, I can also:
+
+- Draft the actual TypeScript package skeleton (`@hsafa/node-sdk`) inside this monorepo.
+- Mirror the style of the existing `@hsafa/react-sdk` (build via `tsup`, ESM, typed exports).

@@ -71,21 +71,54 @@ Stores long-term data:
 **agents**
 
 * id
+* name
+* description
+
+**agent_versions**
+
+* id
+* agent_id
+* version
 * config_json
+* config_hash
 
 **runs**
 
 * id
 * agent_id
-* status (running / waiting_tool / done)
+* agent_version_id
+* status (queued / running / waiting_tool / completed / failed / canceled)
 
-**messages**
+**run_events**
 
 * id
 * run_id
-* role (user/assistant/tool)
-* content
-* type (chunk/final/tool_call/tool_result)
+* seq
+* type
+* payload
+
+**tool_calls**
+
+* run_id
+* call_id
+* tool_name
+* args
+* execution_target (server/device/browser/external)
+* status
+
+**tool_results**
+
+* run_id
+* call_id
+* result
+* source (server/device/browser)
+
+**devices**
+
+* id
+* device_key
+* capabilities
+* last_seen_at
 
 This lets any client reload full history.
 
@@ -133,7 +166,7 @@ XADD run:123:stream chunk " world"
 Client subscribes:
 
 ```
-GET /runs/123/stream
+GET /api/runs/123/stream
 ```
 
 Server reads Redis stream and pushes events.
@@ -170,11 +203,11 @@ You store event and publish:
 
 ```json
 {
-  "type": "tool_call",
-  "callId": "abc123",
-  "tool": "scanFiles",
-  "args": {...},
-  "targetClient": "deviceA"
+  "type": "tool.call",
+  "toolCallId": "abc123",
+  "toolName": "scanFiles",
+  "args": {"...": "..."},
+  "executionTarget": "device"
 }
 ```
 
@@ -182,9 +215,6 @@ Saved in:
 
 * PostgreSQL (history)
 * Redis Stream (live)
-* Redis PubSub (notify device)
-
----
 
 ### 2️⃣ Target Client Executes Tool
 
@@ -192,8 +222,8 @@ Client connected via WebSocket receives the request, runs the tool locally, and 
 
 ```json
 {
-  "type": "tool_result",
-  "callId": "abc123",
+  "type": "tool.result",
+  "toolCallId": "abc123",
   "result": {...}
 }
 ```
@@ -224,7 +254,8 @@ You ONLY use:
 
 | Function             | Purpose                                |
 | -------------------- | -------------------------------------- |
-| `streamText`         | Stream model output                    |
+| `ToolLoopAgent`      | Runs the tool loop + model decisions   |
+| `agent.stream(...)`  | Streams parts (text + tools + steps)   |
 | Tool calling support | Let model decide when tools are needed |
 
 You handle:
@@ -238,136 +269,7 @@ SDK = **decision engine only**
 
 ---
 
-# 🔌 Client Types Supported
-
-Because everything goes through your API:
-
-| Client           | Works? | How              |
-| ---------------- | ------ | ---------------- |
-| Vite / React     | ✅      | SSE + WebSockets |
-| Mobile app       | ✅      | HTTP + WS        |
-| Node app         | ✅      | HTTP + WS        |
-| Multiple devices | ✅      | Shared runId     |
-
----
-
-# 🧭 Run Lifecycle
-
-Each run moves through states:
-
-```
-queued → running → waiting_tool → running → completed
-```
-
-Stored in DB so system can recover if server restarts.
-
----
-
-# 🧰 Final Tool Stack
-
-| Purpose          | Technology                |
-| ---------------- | ------------------------- |
-| AI Agent Brain   | **Vercel AI SDK (Core)**  |
-| API Server       | Node.js (Fastify/Express) |
-| Database         | PostgreSQL                |
-| ORM              | Prisma or Drizzle         |
-| Live Streaming   | **Redis Streams**         |
-| Tool Messaging   | **Redis Pub/Sub**         |
-| Client Streaming | SSE                       |
-| Device Tool Link | WebSockets                |
-
----
-
-# 🏁 What You're Building (In One Sentence)
-
-You're building a **distributed, persistent, multi-device AI agent runtime** where agents have memory, can stream across sessions, and can use tools running anywhere.
-
-That's startup-level infrastructure, not just an app 💪
-
----
-
-# ✅ What We Do Next (Detailed Approach)
-
-This section turns the architecture into an implementable plan, with concrete schemas and protocols.
-
-## Guiding Principles
-
-- **Single source of truth**
-  - PostgreSQL is authoritative for agent configs, runs, messages, tool invocations, device registrations.
-  - Redis is for low-latency streaming, fanout, and ephemeral coordination.
-- **Event-driven execution**
-  - Every run produces a canonical sequence of events (persisted in Postgres, mirrored into Redis Streams).
-- **Reconnection-first streaming**
-  - Clients must be able to reconnect using the last seen event id and continue.
-- **Distributed tool execution is “async-first”**
-  - Tool calls are requests; tool results can arrive later from a device.
-  - The runtime must support pausing/resuming a run.
-
----
-
-# 🧭 Implementation Roadmap (Phases)
-
-## Phase 0: Current Baseline (You already have parts)
-
-- **Gateway**
-  - A Node.js server that can build a `ToolLoopAgent` from JSON config.
-  - A streaming endpoint that returns AI SDK UI message streams.
-
-## Phase 1: Persistent Runs + Reconnectable Streaming
-
-- **Add Postgres** (authoritative history)
-  - Persist agents, runs, and messages.
-  - Every streaming chunk becomes an event (not just a final answer).
-- **Add Redis Streams** (replayable streaming)
-  - Mirror run events into `run:{runId}:stream`.
-- **Implement SSE replay**
-  - `GET /runs/:runId/stream` reads Redis Stream from the client’s last event id.
-  - Uses `Last-Event-ID` (SSE standard) or `?since=<redisStreamId>`.
-
-Definition of done:
-
-- Refresh page and resume stream with no missing chunks.
-- A second client can attach and watch the same run.
-
-## Phase 2: Distributed Tool Execution (Device Runtime)
-
-- **Device registry**
-  - Devices connect via WebSocket to the gateway and identify themselves.
-- **Tool call dispatch**
-  - When the agent requests a tool with `execution: "device"`, gateway publishes a tool request to the target device.
-  - Run transitions to `waiting_tool`.
-- **Tool result ingestion**
-  - Device sends result back.
-  - Gateway appends tool result as an event and resumes the run.
-
-Definition of done:
-
-- Tool call appears in Redis stream.
-- A device executes it and returns a result.
-- Run continues and all watchers see the full lifecycle.
-
-## Phase 3: Reliability + Operations
-
-- **Idempotency**
-  - Ensure tool results are applied once (`callId` unique).
-- **Crash recovery**
-  - If gateway restarts, runs in `running`/`waiting_tool` can be recovered from Postgres state.
-- **Retention**
-  - Stream trimming + archiving.
-- **Observability**
-  - Per-run metrics: tokens, latency, tool call durations, errors.
-
-## Phase 4: Multi-tenant + Security
-
-- **Auth** (API keys / JWT)
-- **Tenant scoping**
-  - Agents, runs, and devices are tenant-scoped.
-- **Tool security policies**
-  - Allowlists, approval flows, tool capability declarations.
-
----
-
-# 🗄️ PostgreSQL Schema (Expected)
+# 🗄️ PostgreSQL Schema (Current)
 
 This is a recommended baseline schema that supports:
 
@@ -392,7 +294,6 @@ This is a recommended baseline schema that supports:
 Recommended columns:
 
 - `id uuid pk`
-- `tenant_id uuid null`
 - `name text not null`
 - `description text null`
 - `created_at timestamptz not null default now()`
@@ -400,7 +301,7 @@ Recommended columns:
 
 Indexes/constraints:
 
-- Unique: `(tenant_id, name)`
+- Unique: `(name)`
 
 ### `agent_versions`
 
@@ -413,6 +314,7 @@ Recommended columns:
 - `version text not null` (semver or timestamp-based)
 - `config_json jsonb not null`
 - `config_hash text not null` (sha256 for idempotent publish)
+- `metadata jsonb null`
 - `created_at timestamptz not null default now()`
 
 Indexes/constraints:
@@ -427,7 +329,6 @@ Indexes/constraints:
 Recommended columns:
 
 - `id uuid pk`
-- `tenant_id uuid null`
 - `agent_id uuid not null`
 - `agent_version_id uuid not null`
 - `status text not null` (`queued|running|waiting_tool|completed|failed|canceled`)
@@ -439,7 +340,6 @@ Recommended columns:
 
 Indexes:
 
-- `(tenant_id, created_at desc)`
 - `(status, updated_at desc)`
 - `(agent_id, created_at desc)`
 
@@ -461,23 +361,18 @@ Indexes/constraints:
 - Unique: `(run_id, seq)`
 - Index: `(run_id, created_at)`
 
-Notes:
-
-- This table replaces the old “messages table” concept by making everything an event.
-- If you still want a `messages` table for convenience, treat it as a derived cache.
-
-## Tool Invocation Tables (Distributed tools)
-
 ### `tool_calls`
 
+- **Purpose**: tool invocation state.
+
+Recommended columns:
+
 - `id uuid pk`
-- `run_id uuid not null`
-- `seq bigint not null` (matches a `run_events.seq`)
+- `run_id uuid not null fk -> runs(id)`
 - `call_id text not null` (provided by runtime; unique per run)
 - `tool_name text not null`
 - `args jsonb not null`
 - `execution_target text not null` (`server|device|browser|external`)
-- `target_device_id uuid null`
 - `status text not null` (`requested|dispatched|completed|failed|expired`)
 - `requested_at timestamptz not null default now()`
 - `completed_at timestamptz null`
@@ -486,12 +381,16 @@ Notes:
 Indexes/constraints:
 
 - Unique: `(run_id, call_id)`
-- Index: `(target_device_id, status)`
+- Index: `(execution_target, status)`
 
 ### `tool_results`
 
+- **Purpose**: tool result storage.
+
+Recommended columns:
+
 - `id uuid pk`
-- `run_id uuid not null`
+- `run_id uuid not null fk -> runs(id)`
 - `call_id text not null`
 - `result jsonb not null`
 - `source text not null` (`server|device|browser`)
@@ -501,33 +400,24 @@ Indexes/constraints:
 
 - Unique: `(run_id, call_id)`
 
-## Devices
-
 ### `devices`
 
+- **Purpose**: device registry.
+
+Recommended columns:
+
 - `id uuid pk`
-- `tenant_id uuid null`
-- `device_key text not null` (stable identifier provided by client)
-- `display_name text null`
-- `capabilities jsonb not null default '{}'::jsonb` (what tools/permissions it has)
-- `created_at timestamptz not null default now()`
-- `last_seen_at timestamptz null`
+- `device_key text not null` (unique identifier)
+- `capabilities jsonb not null` (list of supported tools)
+- `last_seen_at timestamptz null` (timestamp of last heartbeat)
 
 Indexes/constraints:
 
-- Unique: `(tenant_id, device_key)`
-
-### `device_sessions`
-
-- `id uuid pk`
-- `device_id uuid not null`
-- `connected_at timestamptz not null default now()`
-- `disconnected_at timestamptz null`
-- `connection_meta jsonb not null default '{}'::jsonb` (ip, user agent, etc.)
+- Unique: `(device_key)`
 
 ---
 
-# ⚡ Redis Schema (Expected)
+# ⚡ Redis Schema (Current)
 
 Redis is for:
 
@@ -539,8 +429,7 @@ Redis is for:
 ## Key Naming Convention
 
 - `run:{runId}:stream` (Redis Stream)
-- `run:{runId}:state` (Hash)
-- `run:{runId}:watchers` (Set, optional)
+- `run:{runId}:notify` (Pub/Sub)
 - `device:{deviceId}:inbox` (Redis Stream or Pub/Sub channel)
 - `device:{deviceId}:presence` (String or Hash, TTL)
 
@@ -568,68 +457,36 @@ Retention:
 - Use `XTRIM run:{runId}:stream MAXLEN ~ 10000` (or time-based trim)
 - Optional: keep full history in Postgres; Redis is just a hot window.
 
-### `device:{deviceId}:inbox`
-
-- **Option A (recommended)**: Redis Stream for device tool requests.
-- **Option B**: Pub/Sub for lowest latency (but no replay).
-
-If you choose streams, devices can resume tool requests after disconnect.
-
-## Redis Pub/Sub Channels (Optional)
-
-- `device:{deviceId}:notify`
-  - Push “you have a new tool request” to wake up a device.
-- `run:{runId}:notify`
-  - Notify watchers there is new stream data.
-
-## Ephemeral State Keys
-
-### `run:{runId}:state`
-
-- **Type**: Hash
-- **Fields**:
-  - `status`
-  - `last_seq`
-  - `updated_at`
-- **TTL**: optional (do not expire if you need long running runs)
-
-### `device:{deviceId}:presence`
-
-- **Type**: String or Hash
-- **TTL**: short (e.g. 30s), refreshed by heartbeat.
-
 ---
 
-# 🧬 Event & Message Protocol (The “Clean Contract”)
+# 🧬 Event & Message Protocol (Current)
 
-Define one canonical event envelope used everywhere:
+Gateway SSE events use a single envelope:
 
 ```json
 {
-  "runId": "uuid",
-  "seq": 42,
-  "type": "assistant.delta",
+  "id": "1738400000000-0",
+  "type": "text.delta",
   "ts": "2026-01-30T12:00:00.000Z",
-  "data": { }
+  "data": {}
 }
 ```
 
-## Recommended Event Types
+## Event Types (examples from current runtime)
 
 - `run.created`
 - `run.started`
-- `run.status`
-- `assistant.delta`
-- `assistant.message`
-- `tool.call.requested`
-- `tool.call.dispatched`
-- `tool.result.received`
+- `text.delta`
+- `message.user`
+- `message.assistant`
+- `tool.call`
+- `tool.result`
 - `run.completed`
 - `run.failed`
 
 ## SSE Contract
 
-- Endpoint: `GET /runs/:runId/stream`
+- Endpoint: `GET /api/runs/:runId/stream`
 - Client reconnect:
   - sends `Last-Event-ID: <redisStreamId>`
   - or `?since=<redisStreamId>`
@@ -648,105 +505,19 @@ data: {"runId":...,"seq":...,"type":...,"ts":...,"data":...}
 
 ---
 
-# 🔌 API Surface (Gateway)
+# 🔌 API Surface (Gateway, Current)
 
-Minimum endpoints to make the system real:
+Current endpoints:
 
-- `POST /agents` (create agent)
-- `POST /agents/:agentId/versions` (publish config version)
-- `GET /agents/:agentId` (agent metadata)
-- `POST /runs` (start run)
-- `GET /runs/:runId` (run state)
-- `GET /runs/:runId/events` (Postgres event history)
-- `GET /runs/:runId/stream` (SSE from Redis)
-- `POST /runs/:runId/tool-results` (device posts tool result)
-- `GET /devices` / `POST /devices` (register)
-- `WS /devices/connect` (device session + inbox subscription)
-
----
-
-# 🧰 Agent Publishing From Client Codebases (CLI Workflow)
-
-In addition to “users send JSON directly”, support a workflow where an agent is authored inside a client repository and then registered into the gateway.
-
-## Why This Matters
-
-- Teams want agents to be:
-  - code-reviewed
-  - versioned
-  - shipped through CI
-  - publishable to multiple gateways (dev/staging/prod)
-
-## Agent Authoring Format
-
-Support two primary formats:
-
-- **`agent.json`**
-  - fully declarative.
-- **`agent.ts`**
-  - exports an `agentConfig` object.
-  - CLI compiles it, validates it, and uploads the resulting JSON.
-
-## CLI Commands (Proposed)
-
-- `hsafa-agent init`
-  - scaffolds `agent.ts` or `agent.json`.
-- `hsafa-agent validate --file agent.ts`
-  - runs schema validation (same schema as the gateway).
-- `hsafa-agent publish --gateway https://gateway.example.com --file agent.ts --name research-agent --version 1.2.0`
-  - uploads agent config as a new `agent_version`.
-- `hsafa-agent list --gateway ...`
-  - lists available agents and versions.
-- `hsafa-agent pull --gateway ... --name research-agent --version 1.2.0`
-  - downloads config for inspection.
-
-## Publish Protocol (Gateway)
-
-CLI calls:
-
-- `POST /agents` (if agent doesn’t exist)
-- `POST /agents/:agentId/versions`
-
-Payload example:
-
-```json
-{
-  "name": "research-agent",
-  "version": "1.2.0",
-  "config": { "version": "1.0", "agent": { ... }, "model": { ... }, "tools": [ ... ] },
-  "configHash": "sha256:...",
-  "metadata": {
-    "source": "cli",
-    "repo": "git@github.com:org/project.git",
-    "commit": "abcdef"
-  }
-}
-```
-
-Gateway guarantees idempotency:
-
-- If `(agent_id, config_hash)` already exists, respond with success and return existing version.
-
-## Security Model for CLI
-
-- CLI authenticates using:
-  - an API key (`Authorization: Bearer ...`)
-  - or OAuth device flow (later)
-- Gateway checks:
-  - tenant scope
-  - publish permissions
-  - tool policy compliance (allowlist/approval requirements)
+- `POST /api/agents` (create agent + create version if config changed)
+- `GET  /api/runs?agentId=...` (list runs)
+- `POST /api/runs` (create run)
+- `POST /api/runs/:runId/messages` (append user message and start/resume run)
+- `GET  /api/runs/:runId` (run state)
+- `GET  /api/runs/:runId/events` (Postgres event history)
+- `GET  /api/runs/:runId/stream` (SSE from Redis)
+- `POST /api/runs/:runId/tool-results` (submit tool result)
+- `GET  /api/agent-config/:agentName` (legacy)
+- `WS   /devices/connect` (device registration + tool results)
 
 ---
-
-# ✅ Recommended Next Steps
-
-- Decide whether to store UI state as derived from `run_events` (recommended) or as a separate `messages` table.
-- Implement Phase 1 end-to-end:
-  - Postgres `agents/agent_versions/runs/run_events`
-  - Redis `run:{runId}:stream`
-  - SSE replay
-- Implement Phase 2 minimal device runtime:
-  - WebSocket device connection
-  - tool request dispatch + tool result ingestion
-- Add CLI publishing (even a minimal version) so teams can build agents in their own repos and push them into the gateway.

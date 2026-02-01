@@ -5,9 +5,6 @@
  * while leveraging all Hsafa agent capabilities.
  */
 
-export { useHsafaAgent } from './useHsafaAgent';
-export type { UseHsafaAgentConfig, HsafaAgentAPI } from './useHsafaAgent';
-
 export { useChatStorage } from './useChatStorage';
 export type { 
   UseChatStorageConfig, 

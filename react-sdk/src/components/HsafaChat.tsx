@@ -3,27 +3,22 @@ import { createPortal } from "react-dom";
 import { ChatHeader } from "./hsafa-chat/ChatHeader";
 import { useFileUpload } from "../hooks/useFileUploadHook";
 import { useAutoScroll } from "../hooks/useAutoScroll";
-import { useHsafaAgent } from "../hooks/useHsafaAgent";
-import { useHsafaGateway, type GatewayMessage } from "../hooks/useHsafaGateway";
-import { useChatStorage } from "../hooks/useChatStorage";
+import { useHsafaGateway } from "../hooks/useHsafaGateway";
 import { HsafaChatProps } from "../types/chat";
 import { MessageList } from "./hsafa-chat";
 import { ChatInput } from "./hsafa-chat";
 import { PresetPrompts } from "./hsafa-chat";
-import { createChatStorage, ChatMeta } from "../utils/chat-storage";
-import type { Attachment } from '../types/chat';
+import { ChatMeta } from "../utils/chat-storage";
 import { ChatHistoryModal } from "./hsafa-chat/ChatHistoryModal";
 import { ChatHistorySidebar } from "./hsafa-chat/ChatHistorySidebar";
 import { ConfirmEditModal } from "./hsafa-chat/ConfirmEditModal";
 import { useHsafa } from "../providers/HsafaProvider";
 import { FloatingChatButton } from "./FloatingChatButton";
 import CursorController from "./web-controler/CursorController";
-import { createBuiltInTools } from "./hsafa-chat/utils/builtInTools";
 import { createBuiltInUI } from "./hsafa-chat/utils/builtInUI";
 
 export function HsafaChat({
   agentName,
-  agentConfig = '',
   agentId,
   gatewayUrl,
   runId: providedRunId,
@@ -53,7 +48,6 @@ export function HsafaChat({
   lang,
   language,
   baseUrl = '',
-  initialMessages = [],
   onMessagesChange,
   defaultOpen = true,
   floatingButtonPosition = { bottom: 24, right: 24 },
@@ -67,7 +61,6 @@ export function HsafaChat({
   onFinish,
   currentChat,
   onChatChanged,
-  templateParams,
   fullPageChat = false,
   title,
   placeholder,
@@ -79,13 +72,14 @@ export function HsafaChat({
   onMessagesChange?: (messages: any[], chatId?: string) => void;
   HsafaUI?: Record<string, React.ComponentType<any>>;
 }) {
-  const { dir: providerDir, theme: providerTheme, baseUrl: providerBaseUrl, setStreamingState, setChatOpenState } = useHsafa();
+  const { dir: providerDir, theme: providerTheme, baseUrl: providerBaseUrl, setStreamingState } = useHsafa();
   const effectiveDir = (dir || providerDir || 'ltr') as 'rtl' | 'ltr';
   const isRTL = effectiveDir === 'rtl';
   const effectiveLang = (lang || language || 'en') as 'en' | 'ar';
   const isArabic = effectiveLang === 'ar';
   const effectiveTheme = (theme || providerTheme || 'dark');
   const effectiveBaseUrl = (baseUrl && baseUrl.length > 0) ? baseUrl : (providerBaseUrl || '');
+  const effectiveGatewayUrl = (gatewayUrl && gatewayUrl.length > 0) ? gatewayUrl : effectiveBaseUrl;
   
   // Determine the primary color based on theme
   const effectivePrimaryColor = effectiveTheme === 'dark' 
@@ -208,13 +202,14 @@ export function HsafaChat({
     return dict[key] || en[key] || key;
   };
 
-  // Determine which mode to use
-  const isGatewayMode = Boolean(gatewayUrl && agentId);
+  const configuredAgentId = typeof agentId === 'string' ? agentId : '';
+  const hasValidGatewayConfig = Boolean(configuredAgentId && effectiveGatewayUrl);
 
-  // Built-in tools and UI (shared between modes)
-  const builtInTools = useMemo(() => createBuiltInTools(), []);
+  const CURRENT_RUN_KEY = `hsafa-current-run:${configuredAgentId || agentName}`;
+  const HISTORY_OPEN_KEY = `hsafa-history-open:${configuredAgentId || agentName}`;
+
+  // Built-in UI
   const builtInUI = useMemo(() => createBuiltInUI(), []);
-  const allTools = useMemo(() => ({ ...builtInTools, ...HsafaTools }), [builtInTools, HsafaTools]);
   const allUI = useMemo(() => ({ ...builtInUI, ...HsafaUI }), [builtInUI, HsafaUI]);
 
   // Form state refs (shared between modes)
@@ -242,32 +237,11 @@ export function HsafaChat({
     console.error('Chat error:', error);
   }, []);
 
-  // Legacy mode: useHsafaAgent hook
-  const legacyAgent = useHsafaAgent({
-    agentName,
-    agentConfig: isGatewayMode ? '' : agentConfig, // Only use if not gateway mode
-    baseUrl: effectiveBaseUrl,
-    tools: HsafaTools as Record<string, (input: unknown) => unknown>,
-    uiComponents: HsafaUI as Record<string, React.ComponentType<unknown>>,
-    templateParams,
-    controlledChatId: currentChat,
-    onChatIdChange: currentChat === undefined
-      ? (id: string) => {
-          if (onChatChanged) onChatChanged(id);
-        }
-      : undefined,
-    onStart: onStartCallback,
-    onFinish: onFinishCallback,
-    onError: onErrorCallback,
-    initialMessages,
-    onMessagesChange,
-  });
-
-  // Gateway mode: useHsafaGateway hook
+  // Gateway mode: useHsafaGateway hook (SDK is gateway-only)
   const gatewayAgent = useHsafaGateway({
-    gatewayUrl: gatewayUrl || '',
-    agentId: isGatewayMode ? agentId : undefined,
-    runId: providedRunId,
+    gatewayUrl: effectiveGatewayUrl,
+    agentId: configuredAgentId,
+    runId: providedRunId || currentChat,
     senderId,
     senderName,
     tools: HsafaTools as Record<string, (args: unknown) => Promise<unknown> | unknown>,
@@ -275,35 +249,25 @@ export function HsafaChat({
     onError: onErrorCallback,
   });
 
-  // Unified interface - select based on mode
-  const input = isGatewayMode ? gatewayInput : legacyAgent.input;
-  const setInput = isGatewayMode ? setGatewayInput : legacyAgent.setInput;
-  const chatMessages = isGatewayMode ? (gatewayAgent.messages as unknown[]) : legacyAgent.messages;
-  const isLoading = isGatewayMode ? gatewayAgent.isStreaming : legacyAgent.isLoading;
-  const status = isGatewayMode ? gatewayAgent.status : legacyAgent.status;
-  const chatError = isGatewayMode ? gatewayAgent.error : legacyAgent.error;
-  const stop = isGatewayMode ? gatewayAgent.stop : legacyAgent.stop;
-  // Gateway mode doesn't support setMessages - use reset instead
-  const setMessages = useMemo(() => isGatewayMode 
-    ? () => { /* gateway mode uses reset() instead */ }
-    : legacyAgent.setMessages
-  , [isGatewayMode, legacyAgent.setMessages]);
-  const internalChatId = isGatewayMode ? gatewayChatId : legacyAgent.chatId;
-  const setInternalChatId = isGatewayMode ? setGatewayChatId : legacyAgent.setChatId;
-  const chatApi = isGatewayMode ? gatewayAgent : legacyAgent.chatApi;
+  const input = gatewayInput;
+  const setInput = setGatewayInput;
+  const chatMessages = gatewayAgent.messages as unknown[];
+  const isLoading = gatewayAgent.isStreaming;
+  const status = gatewayAgent.status;
+  const chatError = gatewayAgent.error;
+  const stop = gatewayAgent.stop;
+  const internalChatId = gatewayChatId;
+  const chatApi = gatewayAgent;
 
   // Gateway mode sendMessage adapter
   const sendMessage = useCallback(async (options?: { text?: string; files?: unknown[] }) => {
-    if (isGatewayMode) {
-      const text = options?.text ?? gatewayInput;
-      const files = (options?.files || []) as Array<{ url: string; mediaType: string; name?: string }>;
-      await gatewayAgent.sendMessage(text, files.length > 0 ? files : undefined);
-      if (!options?.text) setGatewayInput('');
-      onStartCallback({ role: 'user', content: text });
-    } else {
-      await legacyAgent.sendMessage(options);
-    }
-  }, [isGatewayMode, gatewayInput, gatewayAgent, legacyAgent, onStartCallback]);
+    if (!hasValidGatewayConfig) return;
+    const text = options?.text ?? gatewayInput;
+    const files = (options?.files || []) as Array<{ url: string; mediaType: string; name?: string }>;
+    await gatewayAgent.sendMessage(text, files.length > 0 ? files : undefined);
+    if (!options?.text) setGatewayInput('');
+    onStartCallback({ role: 'user', content: text });
+  }, [hasValidGatewayConfig, gatewayInput, gatewayAgent, onStartCallback]);
 
   // Notify messages change
   const notifyMessagesChange = useCallback(() => {
@@ -314,62 +278,31 @@ export function HsafaChat({
 
   // Cleanup forms
   const cleanupAllForms = useCallback(() => {
-    if (isGatewayMode) {
-      formHostRef.current.forEach((el) => { try { el.remove(); } catch { /* ignore cleanup errors */ } });
-      formHostRef.current.clear();
-      formStateRef.current.clear();
-    } else {
-      legacyAgent.cleanupForms();
-    }
-  }, [isGatewayMode, legacyAgent]);
+    formHostRef.current.forEach((el) => { try { el.remove(); } catch { /* ignore cleanup errors */ } });
+    formHostRef.current.clear();
+    formStateRef.current.clear();
+  }, []);
 
   // UI tool handlers
   const handleUISuccess = useCallback((toolCallId: string, toolName: string) => {
-    if (isGatewayMode) {
-      gatewayAgent.addToolResult({
-        tool: toolName,
-        toolCallId,
-        output: { status: 'ok', rendered: true, component: toolName },
-      });
-    } else {
-      legacyAgent.onUISuccess(toolCallId, toolName);
-    }
-  }, [isGatewayMode, gatewayAgent, legacyAgent]);
+    gatewayAgent.addToolResult({
+      tool: toolName,
+      toolCallId,
+      output: { status: 'ok', rendered: true, component: toolName },
+    });
+  }, [gatewayAgent]);
 
   const handleUIError = useCallback((toolCallId: string, toolName: string, error: Error) => {
-    if (isGatewayMode) {
-      gatewayAgent.addToolResult({
-        tool: toolName,
-        toolCallId,
-        state: 'output-error',
-        errorText: error?.message || String(error),
-      });
-    } else {
-      legacyAgent.onUIError(toolCallId, toolName, error);
-    }
-  }, [isGatewayMode, gatewayAgent, legacyAgent]);
+    gatewayAgent.addToolResult({
+      tool: toolName,
+      toolCallId,
+      state: 'output-error',
+      errorText: error?.message || String(error),
+    });
+  }, [gatewayAgent]);
 
   // Use controlled chatId if provided, otherwise use internal state
   const chatId = currentChat !== undefined ? currentChat : internalChatId;
-  
-  // Wrapper for setChatId that calls onChatChanged if provided
-  const setChatId = useCallback((newChatId: string) => {
-    if (currentChat === undefined) {
-      // Uncontrolled mode: update internal state
-      setInternalChatId(newChatId);
-    }
-    // Always notify parent if callback provided
-    if (onChatChanged) {
-      onChatChanged(newChatId);
-    }
-  }, [currentChat, setInternalChatId, onChatChanged]);
-
-  // Sync internal chatId with controlled prop when it changes externally
-  useEffect(() => {
-    if (currentChat !== undefined && currentChat !== internalChatId) {
-      setInternalChatId(currentChat);
-    }
-  }, [currentChat, internalChatId, setInternalChatId]);
 
   // File upload hook
   const {
@@ -385,16 +318,16 @@ export function HsafaChat({
 
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Hsafa provider integration and header/history state
   const [isOpen, setIsOpen] = useState<boolean>(() => {
+    return Boolean(defaultOpen);
+  });
+  const [historyOpen, setHistoryOpen] = useState<boolean>(() => {
     try {
-      const tmp = createChatStorage(agentName);
-      return tmp.getShowChat() || Boolean(defaultOpen);
+      return localStorage.getItem(HISTORY_OPEN_KEY) === 'true';
     } catch {
-      return Boolean(defaultOpen);
+      return false;
     }
   });
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const historyBtnRef = useRef<HTMLButtonElement>(null);
@@ -415,55 +348,30 @@ export function HsafaChat({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Use chat storage hook for automatic persistence (disabled in gateway mode)
-  const chatStorage = useChatStorage({
-    agentId: agentName,
-    chatId,
-    messages: chatMessages,
-    isLoading,
-    autoSave: !isGatewayMode, // Gateway mode handles persistence server-side
-    autoRestore: false, // We handle restore manually to set chatId
-  });
-  
-  // Keep reference to raw storage for UI preferences
-  const storage = chatStorage.storage;
-
   const [chatHistory, setChatHistory] = useState<ChatMeta[]>([]);
   
-  // Load chat history - gateway mode uses API, legacy uses localStorage
   const loadRunsRef = useRef(gatewayAgent.loadRuns);
   loadRunsRef.current = gatewayAgent.loadRuns;
   
   useEffect(() => {
-    if (isGatewayMode) {
-      // Gateway mode: load runs from PostgreSQL via API
-      loadRunsRef.current().then(runs => {
-        const history: ChatMeta[] = runs.map(run => ({
-          id: run.id,
-          title: `Run ${run.id.slice(0, 8)}`,
-          createdAt: new Date(run.createdAt).getTime(),
-          updatedAt: run.completedAt ? new Date(run.completedAt).getTime() : new Date(run.createdAt).getTime(),
-        }));
-        setChatHistory(history);
-      }).catch(() => setChatHistory([]));
-    } else {
-      // Legacy mode: load from localStorage
-      try {
-        const history = storage.loadChatsIndex();
-        setChatHistory(history);
-      } catch {
-        setChatHistory([]);
-      }
+    if (!hasValidGatewayConfig) {
+      setChatHistory([]);
+      return;
     }
-  }, [isGatewayMode, storage, historyRefreshKey]);
+
+    loadRunsRef.current().then(runs => {
+      const history: ChatMeta[] = runs.map(run => ({
+        id: run.id,
+        title: `Run ${run.id.slice(0, 8)}`,
+        createdAt: new Date(run.createdAt).getTime(),
+        updatedAt: run.completedAt ? new Date(run.completedAt).getTime() : new Date(run.createdAt).getTime(),
+      }));
+      setChatHistory(history);
+    }).catch(() => setChatHistory([]));
+  }, [hasValidGatewayConfig, historyRefreshKey]);
   
-  // On mount: restore last opened run/chat
   const restoredOnMountRef = useRef<boolean>(false);
-  const lastLoadedChatRef = useRef<string | null>(null);
-  
-  // Gateway mode: simple localStorage for current runId only
-  const CURRENT_RUN_KEY = `hsafa-current-run:${agentId || agentName}`;
-  
+
   // Store gateway methods in refs to avoid dependency issues
   const attachToRunRef = useRef(gatewayAgent.attachToRun);
   attachToRunRef.current = gatewayAgent.attachToRun;
@@ -472,13 +380,14 @@ export function HsafaChat({
   const deleteRunRef = useRef(gatewayAgent.deleteRun);
   deleteRunRef.current = gatewayAgent.deleteRun;
   
-  // Gateway mode: restore saved runId when agent becomes ready
   useEffect(() => {
-    if (!isGatewayMode) return;
+    if (!hasValidGatewayConfig) return;
     if (!gatewayAgent.isReady) return;
     if (restoredOnMountRef.current) return;
-    
+
     restoredOnMountRef.current = true;
+    if (providedRunId || currentChat) return;
+
     try {
       const savedRunId = localStorage.getItem(CURRENT_RUN_KEY);
       if (savedRunId) {
@@ -486,12 +395,12 @@ export function HsafaChat({
         setGatewayChatId(savedRunId);
       }
     } catch { /* ignore */ }
-  }, [isGatewayMode, gatewayAgent.isReady, CURRENT_RUN_KEY]);
+  }, [hasValidGatewayConfig, gatewayAgent.isReady, CURRENT_RUN_KEY, providedRunId, currentChat]);
 
-  // Gateway mode: refresh chat list when a new run is created
+  // Refresh chat list when a new run is created
   const prevRunIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isGatewayMode) return;
+    if (!hasValidGatewayConfig) return;
     const currentRunId = gatewayAgent.runId;
     // If runId changed from null to a value, a new run was created
     if (currentRunId && prevRunIdRef.current === null) {
@@ -499,67 +408,22 @@ export function HsafaChat({
       try { localStorage.setItem(CURRENT_RUN_KEY, currentRunId); } catch { /* ignore */ }
     }
     prevRunIdRef.current = currentRunId;
-  }, [isGatewayMode, gatewayAgent.runId, CURRENT_RUN_KEY]);
-  
+  }, [hasValidGatewayConfig, gatewayAgent.runId, CURRENT_RUN_KEY]);
+
+  // Persist current runId so it is used on next reload
   useEffect(() => {
-    if (restoredOnMountRef.current) return;
-    if (isGatewayMode) return; // Handled above
-    if (currentChat !== undefined) {
-      // Controlled mode: restore messages for the provided chatId without changing chatId
-      try {
-        const saved = storage.loadChat(currentChat);
-        const msgs = saved && Array.isArray(saved.messages) ? saved.messages : [];
-        if (msgs.length > 0) { try { setMessages(msgs); } catch { /* ignore */ } }
-        lastLoadedChatRef.current = currentChat;
-      } catch { /* ignore */ }
-      try { storage.setCurrentChatId(currentChat); } catch { /* ignore */ }
-      restoredOnMountRef.current = true;
-      return;
-    }
+    if (!hasValidGatewayConfig) return;
     try {
-      const savedId = storage.getCurrentChatId();
-      if (savedId) {
-        setChatId(savedId);
-        const saved = storage.loadChat(savedId);
-        const msgs = saved && Array.isArray(saved.messages) ? saved.messages : [];
-        try { setMessages(msgs); } catch { /* ignore */ }
-        lastLoadedChatRef.current = savedId;
+      if (gatewayAgent.runId) {
+        localStorage.setItem(CURRENT_RUN_KEY, gatewayAgent.runId);
       }
     } catch { /* ignore */ }
-    restoredOnMountRef.current = true;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat, isGatewayMode]);
+  }, [hasValidGatewayConfig, gatewayAgent.runId, CURRENT_RUN_KEY]);
 
-  // In controlled mode: reload messages when currentChat changes (for switching)
+  // Persist history open/close state
   useEffect(() => {
-    if (!restoredOnMountRef.current) return; // Wait for initial restore
-    if (currentChat === undefined) return; // Only for controlled mode
-    if (currentChat === lastLoadedChatRef.current) return; // Already loaded
-    
-    // Chat switched: load new chat's messages
-    try {
-      const saved = storage.loadChat(currentChat);
-      const msgs = saved && Array.isArray(saved.messages) ? saved.messages : [];
-      try { setMessages(msgs); } catch { /* ignore */ }
-      lastLoadedChatRef.current = currentChat;
-      try { storage.setCurrentChatId(currentChat); } catch { /* ignore */ }
-    } catch { /* ignore */ }
-  }, [currentChat, storage, setMessages]);
-
-  // After restore: persist current chatId/runId so it is used on next reload
-  useEffect(() => {
-    if (!restoredOnMountRef.current) return;
-    if (isGatewayMode) {
-      // Gateway mode: save current runId to localStorage (one value only)
-      try {
-        if (gatewayAgent.runId) {
-          localStorage.setItem(CURRENT_RUN_KEY, gatewayAgent.runId);
-        }
-      } catch { /* ignore */ }
-    } else {
-      try { storage.setCurrentChatId(chatId); } catch { /* ignore */ }
-    }
-  }, [isGatewayMode, gatewayAgent.runId, chatId, storage, CURRENT_RUN_KEY]);
+    try { localStorage.setItem(HISTORY_OPEN_KEY, String(historyOpen)); } catch { /* ignore */ }
+  }, [HISTORY_OPEN_KEY, historyOpen]);
 
   // Reflect streaming/open state via provider
   useEffect(() => {
@@ -569,14 +433,6 @@ export function HsafaChat({
       try { setStreamingState(chatId, false); } catch { /* ignore */ }
     };
   }, [chatId, isLoading, setStreamingState]);
-
-  useEffect(() => {
-    try { setChatOpenState(chatId, isOpen); } catch { /* ignore */ }
-    return () => {
-      // Cleanup: remove open state when component unmounts or chatId changes
-      try { setChatOpenState(chatId, false); } catch { /* ignore */ }
-    };
-  }, [chatId, isOpen, setChatOpenState]);
 
   // Send message handler
   const handleSendMessage = useCallback(async () => {
@@ -623,74 +479,34 @@ export function HsafaChat({
     setInput('');
     clearAttachments();
     setUploadError(null);
-    
-    if (isGatewayMode) {
-      // Gateway mode: reset the agent (clears messages, runId)
-      resetRef.current();
-      // Clear the current run from localStorage
-      try { localStorage.removeItem(CURRENT_RUN_KEY); } catch { /* ignore */ }
-      setGatewayChatId(`chat_${Date.now()}`);
-      return;
-    }
-    
-    // Legacy mode
-    try { setMessages([]); } catch { /* ignore */ }
-    const newId = `chat_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    lastLoadedChatRef.current = newId;
-    try {
-      chatStorage.createNewChat(() => {
-        setChatId(newId);
-        try { storage.setCurrentChatId(newId); } catch { /* ignore */ }
-      });
-    } catch {
-      setChatId(newId);
-      try { storage.setCurrentChatId(newId); } catch { /* ignore */ }
-    }
-  }, [isLoading, isGatewayMode, CURRENT_RUN_KEY, clearAttachments, storage, setMessages, setChatId, cleanupAllForms, chatStorage]);
+
+    resetRef.current();
+    try { localStorage.removeItem(CURRENT_RUN_KEY); } catch { /* ignore */ }
+    setGatewayChatId(`chat_${Date.now()}`);
+  }, [isLoading, CURRENT_RUN_KEY, clearAttachments, cleanupAllForms, resetRef, setInput]);
 
   const handleHistorySelect = useCallback((id: string, closeHistory: boolean) => {
     if (!id) return;
     if (closeHistory) setHistoryOpen(false);
     cleanupAllForms();
 
-    if (isGatewayMode) {
-      if (id !== gatewayAgent.runId) {
-        attachToRunRef.current(id);
-        setGatewayChatId(id);
-        try { localStorage.setItem(CURRENT_RUN_KEY, id); } catch { /* ignore */ }
-      }
-      return;
+    if (id !== gatewayAgent.runId) {
+      attachToRunRef.current(id);
+      setGatewayChatId(id);
+      try { localStorage.setItem(CURRENT_RUN_KEY, id); } catch { /* ignore */ }
+      if (onChatChanged) onChatChanged(id);
     }
-
-    if (id !== chatId) {
-      setChatId(id);
-      if (currentChat === undefined) {
-        try { storage.setCurrentChatId(id); } catch { /* ignore */ }
-        try {
-          const saved = storage.loadChat(id);
-          const msgs = saved && Array.isArray(saved.messages) ? saved.messages : [];
-          try { setMessages(msgs); } catch { /* ignore */ }
-        } catch { /* ignore */ }
-      }
-    }
-  }, [CURRENT_RUN_KEY, chatId, cleanupAllForms, currentChat, gatewayAgent.runId, isGatewayMode, setChatId, setGatewayChatId, setMessages, storage]);
+  }, [CURRENT_RUN_KEY, cleanupAllForms, gatewayAgent.runId, onChatChanged]);
 
   const handleHistoryDelete = useCallback(async (id: string) => {
     try {
-      if (isGatewayMode) {
-        await deleteRunRef.current(id);
-        if (id === gatewayAgent.runId) {
-          handleNewChat();
-        }
-      } else {
-        storage.deleteChat(id);
-        if (id === chatId) {
-          handleNewChat();
-        }
+      await deleteRunRef.current(id);
+      if (id === gatewayAgent.runId) {
+        handleNewChat();
       }
       setHistoryRefreshKey((v) => v + 1);
     } catch { /* ignore */ }
-  }, [chatId, gatewayAgent.runId, handleNewChat, isGatewayMode, storage]);
+  }, [gatewayAgent.runId, handleNewChat]);
 
   const handleToggleHistory = useCallback(() => {
     setHistoryOpen(v => !v);
@@ -698,8 +514,7 @@ export function HsafaChat({
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
-    try { storage.setShowChat(false); } catch { /* ignore */ }
-  }, [storage]);
+  }, []);
 
 
   // Handle file input change
@@ -739,14 +554,6 @@ export function HsafaChat({
     if (!messageToEdit || isLoading) return;
     
     try {
-      // Find the message index
-      const messageIndex = chatMessages.findIndex((m: any) => m.id === messageToEdit.id);
-      if (messageIndex === -1) return;
-
-      // Remove messages from the edited message onwards
-      const updatedMessages = chatMessages.slice(0, messageIndex);
-      try { setMessages(updatedMessages); } catch { /* ignore */ }
-      
       // Set the message content in the main input
       setInput(messageToEdit.text);
       
@@ -763,7 +570,7 @@ export function HsafaChat({
       console.error('Failed to edit message:', error);
       setUploadError(t('error.failedEdit'));
     }
-  }, [messageToEdit, isLoading, chatMessages, setMessages, setAttachments, notifyMessagesChange, t]);
+  }, [messageToEdit, isLoading, setAttachments, notifyMessagesChange, t, setInput]);
 
   const handleCancelEdit = useCallback(() => {
     setIsConfirmEditOpen(false);
@@ -1413,7 +1220,7 @@ export function HsafaChat({
         t={t}
         onChatSelect={(id) => handleHistorySelect(id, true)}
         onChatDelete={handleHistoryDelete}
-        loadChatsIndex={() => storage.loadChatsIndex()}
+        loadChatsIndex={() => chatHistory}
         historyPopupRef={historyPopupRef}
       />
 
@@ -1511,7 +1318,7 @@ export function HsafaChat({
         {createPortal(panel, document.body)}
         <FloatingChatButton
           show={!isOpen}
-          onClick={() => { setIsOpen(true); try { storage.setShowChat(true); } catch { /* ignore */ } }}
+          onClick={() => { setIsOpen(true); }}
           resolvedColors={resolvedColors as any}
           floatingButtonPosition={floatingButtonPosition}
         />

@@ -9,29 +9,6 @@ import { genId } from '../utils/time';
 
 // ============ Types ============
 
-export interface AgentConfig {
-  version?: string;
-  agent: {
-    name: string;
-    description?: string;
-    system?: string;
-  };
-  model: {
-    provider: string;
-    name: string;
-    temperature?: number;
-    maxOutputTokens?: number;
-  };
-  tools?: Array<{
-    name: string;
-    description: string;
-    inputSchema: unknown;
-    executionTarget?: 'server' | 'browser' | 'device';
-    [key: string]: unknown;
-  }>;
-  [key: string]: unknown;
-}
-
 export type GatewayMessagePart = {
   type: string;
   [key: string]: unknown;
@@ -75,10 +52,8 @@ export interface StreamEvent {
 export interface UseHsafaGatewayConfig {
   /** Gateway URL */
   gatewayUrl: string;
-  /** Agent ID (required for existing agents) */
-  agentId?: string;
-  /** Agent configuration (for registering new agents) */
-  agentConfig?: AgentConfig;
+  /** Agent ID (gateway already knows this agent; SDK does not register agents) */
+  agentId: string;
   /** Attach to existing run */
   runId?: string;
   /** Sender identity */
@@ -97,7 +72,7 @@ export interface UseHsafaGatewayConfig {
 export interface HsafaGatewayAPI {
   messages: GatewayMessage[];
   isStreaming: boolean;
-  status: 'idle' | 'registering' | 'running' | 'streaming' | 'waiting_tool' | 'completed' | 'error';
+  status: 'idle' | 'running' | 'streaming' | 'waiting_tool' | 'completed' | 'error';
   runId: string | null;
   agentId: string | null;
   isReady: boolean;
@@ -121,7 +96,6 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
   const {
     gatewayUrl,
     agentId: providedAgentId,
-    agentConfig,
     runId: providedRunId,
     senderId,
     senderName,
@@ -134,10 +108,9 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
   // State
   const [messages, setMessages] = useState<GatewayMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [status, setStatus] = useState<HsafaGatewayAPI['status']>(providedAgentId ? 'idle' : 'registering');
+  const [status, setStatus] = useState<HsafaGatewayAPI['status']>('idle');
   const [runId, setRunId] = useState<string | null>(providedRunId || null);
   const [agentId, setAgentId] = useState<string | null>(providedAgentId || null);
-  const [agentVersionId, setAgentVersionId] = useState<string | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [pendingToolCalls, setPendingToolCalls] = useState<ToolCall[]>([]);
   const [isReady, setIsReady] = useState(!!providedAgentId);
@@ -179,54 +152,41 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     return id;
   }, [upsertMessageById]);
 
-  // Register agent on mount (only if agentConfig provided, not agentId)
   useEffect(() => {
-    // If agentId is provided directly, we're ready
-    if (providedAgentId) {
-      setAgentId(providedAgentId);
-      setIsReady(true);
-      setStatus('idle');
-      return;
-    }
-
-    // If no agentConfig, nothing to register
-    if (!agentConfig) {
-      setError(new Error('Either agentId or agentConfig must be provided'));
+    if (!providedAgentId) {
+      setError(new Error('agentId is required for useHsafaGateway'));
       setStatus('error');
+      setIsReady(false);
       return;
     }
+    setAgentId(providedAgentId);
+    setIsReady(true);
+    setStatus('idle');
+  }, [providedAgentId]);
 
-    const registerAgent = async () => {
-      try {
-        setStatus('registering');
-        const response = await fetch(`${gatewayUrl}/api/agents`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: agentConfig.agent.name,
-            config: agentConfig,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to register agent: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        setAgentId(data.agentId);
-        setAgentVersionId(data.agentVersionId);
-        setIsReady(true);
-        setStatus('idle');
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        setError(error);
-        setStatus('error');
-        onError?.(error);
-      }
-    };
-
-    registerAgent();
-  }, [gatewayUrl, providedAgentId, agentConfig, onError]);
+  const loadRunEvents = useCallback(async (targetRunId: string): Promise<StreamEvent[]> => {
+    try {
+      const response = await fetch(`${gatewayUrl}/api/runs/${targetRunId}/events`);
+      if (!response.ok) return [];
+      const data = await response.json();
+      const events: unknown[] = Array.isArray(data?.events) ? data.events : [];
+      return events
+        .map((e: unknown): StreamEvent | null => {
+          if (!e || typeof e !== 'object') return null;
+          const ee = e as Record<string, unknown>;
+          const type = typeof ee.type === 'string' ? ee.type : '';
+          if (!type) return null;
+          const seq = ee.seq;
+          const id = typeof seq === 'number' || typeof seq === 'string' ? String(seq) : `evt_${genId()}`;
+          const ts = typeof ee.createdAt === 'string' ? ee.createdAt : '';
+          const payload = (ee.payload ?? {}) as unknown;
+          return { id, type, ts, data: payload };
+        })
+        .filter((x): x is StreamEvent => !!x);
+    } catch {
+      return [];
+    }
+  }, [gatewayUrl]);
 
   // Handle browser tool execution
   const executeBrowserTool = useCallback(async (toolCall: ToolCall): Promise<unknown> => {
@@ -284,6 +244,7 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
       case 'run.created':
       case 'run.started':
         setStatus('streaming');
+        setIsStreaming(true);
         break;
 
       case 'run.waiting_tool':
@@ -291,6 +252,8 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
         break;
 
       case 'reasoning.delta': {
+        setStatus('streaming');
+        setIsStreaming(true);
         const d = data as Record<string, unknown> | null | undefined;
         const delta = typeof d?.delta === 'string' ? d.delta : '';
         if (!delta) break;
@@ -311,6 +274,8 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
       }
 
       case 'text.delta': {
+        setStatus('streaming');
+        setIsStreaming(true);
         const d = data as Record<string, unknown> | null | undefined;
         const delta = typeof d?.delta === 'string' ? d.delta : '';
         if (!delta) break;
@@ -440,12 +405,7 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
 
         if (!toolCall.id || !toolCall.toolName) break;
 
-        // Check if this is a browser tool
-        const toolConfig = agentConfig?.tools?.find(t => t.name === toolCall.toolName);
-        const inferredTarget = toolConfig?.executionTarget;
-        const target = executionTarget || inferredTarget;
-
-        const isBrowserTool = target === 'browser' || !!tools[toolCall.toolName];
+        const isBrowserTool = executionTarget === 'browser' || !!tools[toolCall.toolName];
 
         if (isBrowserTool) {
           // Check if it needs UI interaction
@@ -502,7 +462,7 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
           break;
         }
     }
-  }, [agentConfig?.tools, tools, onToolCall, addToolResult, executeBrowserTool, sendToolResult, runId, onComplete, onError, ensureDraftAssistant]);
+  }, [tools, onToolCall, addToolResult, executeBrowserTool, sendToolResult, runId, onComplete, onError, ensureDraftAssistant]);
 
   // Start SSE stream for a run
   const startStream = useCallback((currentRunId: string) => {
@@ -621,9 +581,36 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
     const history = await loadRunMessages(newRunId);
     setMessages(history);
 
+    // If we don't have an assistant message after the last user message, the run is likely mid-stream.
+    // Replay persisted delta events from Postgres so the user immediately sees partial output after refresh.
+    try {
+      const lastUserIdx = (() => {
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i]?.role === 'user') return i;
+        }
+        return -1;
+      })();
+
+      const hasAssistantAfterLastUser = lastUserIdx >= 0
+        ? history.slice(lastUserIdx + 1).some(m => m?.role === 'assistant')
+        : true;
+
+      if (!hasAssistantAfterLastUser) {
+        const events = await loadRunEvents(newRunId);
+        for (const evt of events) {
+          if (attachedRunIdRef.current !== newRunId) return;
+          if (evt.type === 'text.delta' || evt.type === 'reasoning.delta' || evt.type === 'tool.call' || evt.type === 'tool.result' || evt.type === 'run.completed' || evt.type === 'run.failed' || evt.type === 'stream.error') {
+            processEvent(evt);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
     // Start streaming live updates
     startStream(newRunId);
-  }, [startStream, loadRunMessages]);
+  }, [startStream, loadRunMessages, loadRunEvents, processEvent]);
 
   useEffect(() => {
     if (!providedRunId) return;
@@ -641,7 +628,6 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agentId,
-        agentVersionId: agentVersionId || undefined,
       }),
     });
 
@@ -666,7 +652,7 @@ export function useHsafaGateway(config: UseHsafaGatewayConfig): HsafaGatewayAPI 
 
     startStream(data.runId);
     return data.runId;
-  }, [agentId, agentVersionId, gatewayUrl, isReady, startStream]);
+  }, [agentId, gatewayUrl, isReady, startStream]);
 
   // Send message
   const sendMessage = useCallback(async (text: string, files?: Array<{ url: string; mediaType: string; name?: string }>) => {

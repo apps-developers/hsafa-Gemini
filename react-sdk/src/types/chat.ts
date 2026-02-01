@@ -66,17 +66,9 @@ export type CustomToolUIRenderProps = {
 export interface HsafaChatProps {
   /** Agent name (used for storage keys and display) */
   agentName: string;
-  /** 
-   * Agent config JSON string (legacy mode - uses useHsafaAgent with Vercel AI SDK).
-   * Required if not using gateway mode.
-   */
-  agentConfig?: string;
-  /** 
-   * Agent ID registered in the gateway (gateway mode - uses useHsafaGateway).
-   * When provided with gatewayUrl, enables run-centric gateway mode.
-   */
+  /** Agent ID registered in the gateway (run-centric gateway mode) */
   agentId?: string;
-  /** Gateway URL for run-centric mode (e.g., 'http://localhost:3001') */
+  /** Gateway URL (e.g., 'http://localhost:3001') */
   gatewayUrl?: string;
   /** Existing run ID to attach to (gateway mode only) */
   runId?: string;
