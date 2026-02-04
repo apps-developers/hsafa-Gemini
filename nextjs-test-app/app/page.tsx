@@ -17,6 +17,7 @@ import {
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useHsafaRuntime, type ToolExecutor } from "@/hooks/useHsafaRuntime";
 import { MembersProvider } from "@/hooks/useMembersContext";
+import { StreamingToolCallsProvider } from "@/hooks/useStreamingToolCalls";
 import { cn } from "@/lib/utils";
 
 const GATEWAY_URL = "http://localhost:3001";
@@ -199,7 +200,7 @@ export default function Home() {
     return { error: `Unknown client tool: ${toolName}` };
   }, []);
 
-  const { runtime, membersById } = useHsafaRuntime({
+  const { runtime, membersById, streamingToolCalls } = useHsafaRuntime({
     client,
     entityId: DEMO_USER_ENTITY_ID,
     smartSpaceId: effectiveSmartSpaceId,
@@ -238,7 +239,9 @@ export default function Home() {
               membersById={membersById}
               currentEntityId={DEMO_USER_ENTITY_ID}
             >
-              <Thread />
+              <StreamingToolCallsProvider streamingToolCalls={streamingToolCalls}>
+                <Thread />
+              </StreamingToolCallsProvider>
             </MembersProvider>
           </main>
         </div>

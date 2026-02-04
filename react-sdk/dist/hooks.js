@@ -155,6 +155,9 @@ export function useSmartSpaceMessages(client, input) {
         const handleMessage = (evt) => {
             try {
                 const parsed = parseHsafaEvent(evt.data);
+                if (parsed.type === 'tool.input.start' || parsed.type === 'tool.input.delta') {
+                    console.log('[react-sdk] TOOL INPUT EVENT:', parsed.type, parsed.data);
+                }
                 const payload = parsed.data;
                 const payloadData = (payload?.data ?? null);
                 const runId = typeof payload?.runId === 'string'

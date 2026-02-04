@@ -103,7 +103,7 @@ interface StreamingMessage {
   isStreaming: boolean;
 }
 
-interface StreamingToolCall {
+export interface StreamingToolCall {
   id: string;
   runId: string;
   toolCallId: string;
@@ -226,6 +226,9 @@ export function useSmartSpaceMessages(
     const handleMessage = (evt: MessageEvent) => {
       try {
         const parsed = parseHsafaEvent(evt.data);
+        if (parsed.type === 'tool.input.start' || parsed.type === 'tool.input.delta') {
+          console.log('[react-sdk] TOOL INPUT EVENT:', parsed.type, parsed.data);
+        }
         const payload = parsed.data as SmartSpaceStreamPayload<Record<string, unknown>>;
 
         const payloadData = (payload?.data ?? null) as Record<string, unknown> | null;

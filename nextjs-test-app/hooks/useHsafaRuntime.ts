@@ -142,6 +142,7 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
       }
       
       // Add tool calls that belong to this run
+      console.log('[useHsafaRuntime] streamingToolCalls:', streamingToolCalls.length, streamingToolCalls.map(tc => ({ runId: tc.runId, argsText: tc.argsText?.substring(0, 30) })));
       for (const tc of streamingToolCalls) {
         if (tc.runId === sm.runId) {
           try {
@@ -223,5 +224,5 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
     adapters: threadListAdapter ? { threadList: threadListAdapter } : undefined,
   });
 
-  return { runtime, membersById, pendingToolCalls, submitToolResult };
+  return { runtime, membersById, pendingToolCalls, submitToolResult, streamingToolCalls };
 }

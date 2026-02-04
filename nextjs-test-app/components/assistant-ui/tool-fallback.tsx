@@ -3,16 +3,94 @@
 import { ChevronDownIcon, CheckIcon, LoaderIcon, XCircleIcon, WrenchIcon } from "lucide-react";
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { useStreamingToolCalls } from "@/hooks/useStreamingToolCalls";
+
+/**
+ * Parse partial/incomplete JSON into a valid object.
+ * Handles cases where the JSON is truncated mid-stream.
+ */
+function parsePartialJson(text: string): unknown {
+  if (!text || text.trim().length === 0) return undefined;
+  
+  // Try parsing as-is first (complete JSON)
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Not complete JSON, try to repair it
+  }
+  
+  // Try to close open brackets/braces
+  let repaired = text;
+  
+  // Count unclosed brackets
+  let braceCount = 0;
+  let bracketCount = 0;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (const char of repaired) {
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    
+    if (char === '{') braceCount++;
+    if (char === '}') braceCount--;
+    if (char === '[') bracketCount++;
+    if (char === ']') bracketCount--;
+  }
+  
+  // If we're in a string, close it
+  if (inString) {
+    repaired += '"';
+  }
+  
+  // Remove trailing comma if present
+  repaired = repaired.replace(/,\s*$/, '');
+  
+  // Close any unclosed brackets/braces
+  while (bracketCount > 0) {
+    repaired += ']';
+    bracketCount--;
+  }
+  while (braceCount > 0) {
+    repaired += '}';
+    braceCount--;
+  }
+  
+  try {
+    return JSON.parse(repaired);
+  } catch {
+    // If still fails, return undefined
+    return undefined;
+  }
+}
 
 interface ToolFallbackProps {
   toolName: string;
+  toolCallId: string;
   argsText: string;
   args: Record<string, unknown>;
   result?: unknown;
   status: { type: string; reason?: string };
 }
 
-export function ToolFallback({ toolName, argsText, args, result, status }: ToolFallbackProps) {
+export function ToolFallback({ toolName, toolCallId, argsText: providedArgsText, args, result, status }: ToolFallbackProps) {
+  const { getArgsText } = useStreamingToolCalls();
+  // Use streaming argsText from context if available, otherwise fall back to provided
+  const streamingArgsText = toolCallId ? getArgsText(toolCallId) : undefined;
+  const argsText = streamingArgsText ?? providedArgsText;
+  
+  console.log('[ToolFallback] render:', { toolName, toolCallId, streamingArgsText: streamingArgsText?.substring(0, 30), providedArgsText: providedArgsText?.substring(0, 30), status });
   const [isExpanded, setIsExpanded] = useState(false);
   const isRunning = status.type === "running";
   const isComplete = status.type === "complete";
@@ -181,9 +259,20 @@ function ToolFallbackArgs({ args, argsText, isStreaming }: ToolFallbackArgsProps
     const raw = typeof argsText === "string" ? argsText : "";
 
     if (isStreaming) {
+      // Parse partial JSON to display valid JSON during streaming
+      const partialParsed = parsePartialJson(raw);
+      if (partialParsed !== undefined) {
+        return (
+          <span className="whitespace-pre-wrap wrap-break-word">
+            {JSON.stringify(partialParsed, null, 2)}
+            <span className="inline-block w-[0.6ch] animate-pulse">▍</span>
+          </span>
+        );
+      }
+      // Fallback to raw text if parsing fails
       return (
         <span className="whitespace-pre-wrap wrap-break-word">
-          {raw}
+          {raw || "{}"}
           <span className="inline-block w-[0.6ch] animate-pulse">▍</span>
         </span>
       );
@@ -193,7 +282,9 @@ function ToolFallbackArgs({ args, argsText, isStreaming }: ToolFallbackArgsProps
       try {
         return JSON.stringify(JSON.parse(raw), null, 2);
       } catch {
-        return raw;
+        // Try partial parse as fallback
+        const parsed = parsePartialJson(raw);
+        return parsed !== undefined ? JSON.stringify(parsed, null, 2) : raw;
       }
     }
 

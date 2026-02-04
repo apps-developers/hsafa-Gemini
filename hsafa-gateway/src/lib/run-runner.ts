@@ -122,10 +122,14 @@ export async function executeRun(runId: string): Promise<void> {
 
   const emitEvent: EmitEventFn = async (type, payload) => {
     await emitRunEvent(type, payload);
-    await emitSmartSpaceEvent(run.smartSpaceId, type, payload, {
-      runId,
-      agentEntityId: run.agentEntityId,
-    });
+    try {
+      await emitSmartSpaceEvent(run.smartSpaceId, type, payload, {
+        runId,
+        agentEntityId: run.agentEntityId,
+      });
+    } catch (err) {
+      console.error(`[run-runner] emitSmartSpaceEvent FAILED for ${type}:`, err);
+    }
   };
 
   let mcpClients: MCPClientWrapper[] | undefined;

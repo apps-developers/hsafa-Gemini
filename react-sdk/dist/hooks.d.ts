@@ -30,7 +30,7 @@ interface StreamingMessage {
     parts: SmartSpaceStreamMessage['parts'];
     isStreaming: boolean;
 }
-interface StreamingToolCall {
+export interface StreamingToolCall {
     id: string;
     runId: string;
     toolCallId: string;
