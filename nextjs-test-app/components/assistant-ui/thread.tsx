@@ -6,22 +6,13 @@ import {
   ThreadPrimitive,
   useMessage,
 } from "@assistant-ui/react";
-import {
-  ArrowUpIcon,
-  SquareIcon,
-  LoaderIcon,
-  CheckIcon,
-  WrenchIcon,
-  ChevronDownIcon,
-  ChevronUpIcon,
-  AlertCircleIcon,
-  PlayIcon,
-} from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowUpIcon, SquareIcon } from "lucide-react";
+import { type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useMembers } from "@/hooks/useMembersContext";
+import { ToolFallback } from "./tool-fallback";
 
 export function Thread() {
   return (
@@ -126,17 +117,14 @@ function AssistantMessage() {
           {senderName}
         </div>
       )}
-      <div className={cn(
-        "text-sm rounded-lg px-3 py-2",
-        !isFromMe && "border border-border"
-      )}>
+      <div className="text-sm border border-border rounded-lg px-3 py-2">
         <MessagePrimitive.Content
           components={{
             Text: ({ text }: { text: string }) => (
               <span className="whitespace-pre-wrap">{text}</span>
             ),
             tools: {
-              Fallback: ToolCallUI,
+              Fallback: ToolFallback,
             },
           }}
         />
@@ -145,117 +133,3 @@ function AssistantMessage() {
   );
 }
 
-function useToolDuration(isRunning: boolean): number | null {
-  const startTimeRef = useRef<number | null>(null);
-  const [duration, setDuration] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (isRunning && startTimeRef.current === null) {
-      startTimeRef.current = Date.now();
-    } else if (!isRunning && startTimeRef.current !== null) {
-      setDuration(Date.now() - startTimeRef.current);
-    }
-  }, [isRunning]);
-
-  return duration;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function ToolStatusIcon({
-  isRunning,
-  isComplete,
-  isError,
-}: {
-  isRunning: boolean;
-  isComplete: boolean;
-  isError?: boolean;
-}): ReactNode {
-  if (isRunning) {
-    return <LoaderIcon className="size-3.5 animate-spin text-blue-500" />;
-  }
-  if (isError) {
-    return <AlertCircleIcon className="size-3.5 text-red-500" />;
-  }
-  if (isComplete) {
-    return <CheckIcon className="size-3.5 text-emerald-500" />;
-  }
-  return <WrenchIcon className="size-3.5 text-muted-foreground" />;
-}
-
-interface ToolCallUIProps {
-  toolName: string;
-  argsText: string;
-  args: Record<string, unknown>;
-  result?: unknown;
-  status: { type: string; reason?: string };
-}
-
-function ToolCallUI({ toolName, args, result, status }: ToolCallUIProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const isRunning = status.type === "running";
-  const isComplete = status.type === "complete";
-  const isError = status.type === "incomplete" && status.reason === "error";
-  const duration = useToolDuration(isRunning);
-
-  const hasArgs = args && Object.keys(args).length > 0;
-  const hasResult = result !== undefined && result !== null;
-
-  return (
-    <div
-      className={cn(
-        "my-2 rounded-lg border overflow-hidden",
-        isRunning && "border-blue-500/50 bg-blue-500/5",
-        isComplete && "border-emerald-500/50 bg-emerald-500/5",
-        isError && "border-red-500/50 bg-red-500/5",
-        !isRunning && !isComplete && !isError && "border-border/60 bg-muted/30"
-      )}
-    >
-      {/* Header */}
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-muted/50 transition-colors"
-      >
-        <ToolStatusIcon isRunning={isRunning} isComplete={isComplete} isError={isError} />
-        <span className="font-medium flex-1 text-left">
-          {toolName}
-        </span>
-        {duration !== null && (
-          <span className="text-muted-foreground/60">{formatDuration(duration)}</span>
-        )}
-        {(hasArgs || hasResult) && (
-          isExpanded ? (
-            <ChevronUpIcon className="size-3 text-muted-foreground" />
-          ) : (
-            <ChevronDownIcon className="size-3 text-muted-foreground" />
-          )
-        )}
-      </button>
-
-      {/* Expandable content */}
-      {isExpanded && (hasArgs || hasResult) && (
-        <div className="border-t border-border/50 px-3 py-2 space-y-2">
-          {hasArgs && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Input</div>
-              <pre className="text-xs bg-muted/50 rounded p-2 overflow-x-auto">
-                {JSON.stringify(args, null, 2)}
-              </pre>
-            </div>
-          )}
-          {hasResult && (
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">Output</div>
-              <pre className="text-xs bg-muted/50 rounded p-2 overflow-x-auto">
-                {JSON.stringify(result, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}

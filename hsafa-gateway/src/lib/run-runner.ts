@@ -228,13 +228,6 @@ export async function executeRun(runId: string): Promise<void> {
             }
           }
 
-          await emitEvent('tool.call', {
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            args: input,
-            executionTarget,
-          });
-
           const assistantToolCallMessage = {
             id: `msg-${Date.now()}-assistant-toolcall`,
             role: 'assistant',
@@ -249,10 +242,6 @@ export async function executeRun(runId: string): Promise<void> {
             ],
           };
 
-          await emitEvent('message.assistant', {
-            message: assistantToolCallMessage,
-          });
-
           let targetClientId: string | null = null;
           if (executionTarget === 'client' && run.triggeredById) {
             const targetClient = await prisma.client.findFirst({
@@ -263,6 +252,7 @@ export async function executeRun(runId: string): Promise<void> {
             targetClientId = targetClient?.id ?? null;
           }
 
+          // Persist tool call before emitting tool.call so client can safely submit results.
           await prisma.toolCall.create({
             data: {
               runId,
@@ -292,6 +282,18 @@ export async function executeRun(runId: string): Promise<void> {
             { message: assistantToolCallMessage },
             { runId, agentEntityId: run.agentEntityId }
           );
+
+          // Emit tool.call after persistence so client submissions won't race toolCall creation.
+          await emitEvent('tool.call', {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            args: input,
+            executionTarget,
+          });
+
+          await emitEvent('message.assistant', {
+            message: assistantToolCallMessage,
+          });
 
           if (executionTarget !== 'server') {
             await prisma.run.update({

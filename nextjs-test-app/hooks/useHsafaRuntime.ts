@@ -33,9 +33,19 @@ export interface UseHsafaRuntimeOptions {
 
 type ContentPart = 
   | { type: "text"; text: string }
-  | { type: "tool-call"; toolCallId: string; toolName: string; args: Record<string, unknown> };
+  | {
+      type: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+      argsText?: string;
+      result?: unknown;
+    };
 
-function convertSmartSpaceMessage(msg: SmartSpaceMessageRecord): ThreadMessageLike | null {
+function convertSmartSpaceMessage(
+  msg: SmartSpaceMessageRecord,
+  toolResultsById: Map<string, unknown>
+): ThreadMessageLike | null {
   // Skip tool role messages - they only contain tool-results which are handled internally
   if (msg.role === "tool") {
     return null;
@@ -50,11 +60,14 @@ function convertSmartSpaceMessage(msg: SmartSpaceMessageRecord): ThreadMessageLi
     if (part.type === "text") {
       content.push({ type: "text", text: part.text });
     } else if (part.type === "tool-call") {
+      const args = part.args as Record<string, unknown>;
       content.push({
         type: "tool-call",
         toolCallId: part.toolCallId,
         toolName: part.toolName,
-        args: part.args as Record<string, unknown>,
+        args,
+        argsText: JSON.stringify(args),
+        result: toolResultsById.get(part.toolCallId),
       });
     }
   }
@@ -99,8 +112,19 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
   const isRunning = streamingMessages.some((sm) => sm.isStreaming);
 
   const convertedMessages = useMemo<ThreadMessageLike[]>(() => {
+    const toolResultsById = new Map<string, unknown>();
+    for (const m of rawMessages) {
+      if (m.role !== "tool") continue;
+      const parts = extractMessageParts(m);
+      for (const p of parts) {
+        if (p.type === "tool-result") {
+          toolResultsById.set(p.toolCallId, p.result);
+        }
+      }
+    }
+
     const persisted = rawMessages
-      .map(convertSmartSpaceMessage)
+      .map((m) => convertSmartSpaceMessage(m, toolResultsById))
       .filter((m): m is ThreadMessageLike => m !== null);
 
     // Only show streaming messages that are still actively streaming
@@ -127,6 +151,8 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
               args,
+              argsText: tc.argsText,
+              result: toolResultsById.get(tc.toolCallId),
             });
           } catch {
             content.push({
@@ -134,6 +160,8 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
               toolCallId: tc.toolCallId,
               toolName: tc.toolName,
               args: {},
+              argsText: tc.argsText,
+              result: toolResultsById.get(tc.toolCallId),
             });
           }
         }

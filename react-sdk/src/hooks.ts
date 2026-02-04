@@ -348,12 +348,19 @@ export function useSmartSpaceMessages(
               const newest = newMsgs[newMsgs.length - 1];
               setLastSeq(newest.seq);
 
-              // Remove any streaming messages that are now persisted
-              const persistedRunIds = new Set(
-                newMsgs.map((m) => m.runId).filter((rid): rid is string => typeof rid === 'string' && rid.length > 0)
-              );
-              if (persistedRunIds.size > 0) {
-                setStreamingMessages((prev) => prev.filter((sm) => !persistedRunIds.has(sm.runId)));
+              // Only remove streaming messages when the final assistant text message is persisted.
+              // Tool-call and tool-result messages are also persisted mid-run and should not kill streaming UI.
+              const persistedAssistantTextRunIds = new Set<string>();
+              for (const m of newMsgs) {
+                const rid = m.runId;
+                if (typeof rid !== 'string' || rid.length === 0) continue;
+                if (m.role !== 'assistant') continue;
+                if (typeof m.content === 'string' && m.content.trim().length > 0) {
+                  persistedAssistantTextRunIds.add(rid);
+                }
+              }
+              if (persistedAssistantTextRunIds.size > 0) {
+                setStreamingMessages((prev) => prev.filter((sm) => !persistedAssistantTextRunIds.has(sm.runId)));
               }
 
               // Remove streaming tool calls if their toolCallId is now persisted in the DB
@@ -377,6 +384,14 @@ export function useSmartSpaceMessages(
           // A run started - create streaming message placeholder
           if (!runId) return;
           upsertStreamingMessage({ runId, agentEntityId, isStreaming: true });
+        } else if (parsed.type === 'run.started') {
+          // Runs can be restarted (e.g., after client tool results). Ensure placeholder exists.
+          if (!runId) return;
+          upsertStreamingMessage({ runId, agentEntityId, isStreaming: true });
+        } else if (parsed.type === 'run.waiting_tool') {
+          // The run is paused waiting for a tool result.
+          if (!runId) return;
+          upsertStreamingMessage({ runId, agentEntityId, isStreaming: false });
         } else if (parsed.type === 'text.delta') {
           // Streaming content update for a run
           if (!runId) return;
@@ -391,6 +406,8 @@ export function useSmartSpaceMessages(
           const toolCallId = typeof data?.toolCallId === 'string' ? data.toolCallId : null;
           const toolName = typeof data?.toolName === 'string' ? data.toolName : null;
           if (!toolCallId || !toolName) return;
+          // Ensure we have a streaming message container so tool UI can show while args stream.
+          upsertStreamingMessage({ runId, agentEntityId, isStreaming: true });
           upsertStreamingToolCall({ runId, toolCallId, toolName, isStreaming: true });
         } else if (parsed.type === 'tool.input.delta') {
           if (!runId) return;
@@ -398,6 +415,8 @@ export function useSmartSpaceMessages(
           const toolCallId = typeof data?.toolCallId === 'string' ? data.toolCallId : null;
           const delta = typeof data?.delta === 'string' ? data.delta : null;
           if (!toolCallId || !delta) return;
+          // Ensure we have a streaming message container so tool UI can show while args stream.
+          upsertStreamingMessage({ runId, agentEntityId, isStreaming: true });
           upsertStreamingToolCall({
             runId,
             toolCallId,
@@ -415,6 +434,15 @@ export function useSmartSpaceMessages(
           const executionTarget = typeof data?.executionTarget === 'string' ? data.executionTarget : 'server';
           
           if (!toolCallId || !toolName) return;
+
+          // Mark tool input streaming complete and ensure argsText is populated.
+          upsertStreamingToolCall({
+            runId,
+            toolCallId,
+            toolName,
+            appendDelta: '',
+            isStreaming: false,
+          });
           
           // Only handle client-side tools
           if (executionTarget === 'client') {
