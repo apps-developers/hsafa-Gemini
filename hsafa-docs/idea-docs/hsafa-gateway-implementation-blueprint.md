@@ -1,4 +1,4 @@
-# Hsafa Gateway — Implementation Blueprint (Nexus + Entity Runtime)
+# Hsafa Gateway — Implementation Blueprint (SmartSpace + Entity Runtime)
 
 This document turns the idea in `hsafa-gateway-doc.mdx` into a buildable system design.
 
@@ -6,7 +6,7 @@ It is written to be compatible with the current codebase:
 
 - `hsafa-gateway/` (Express + TypeScript + Prisma + Redis + ws + Vercel AI SDK)
 - `react-sdk/` (custom gateway transport via SSE)
-- `hsafa-gateway/prisma/schema.prisma` (Entity/Nexus/Run models)
+- `hsafa-gateway/prisma/schema.prisma` (Entity/SmartSpace/Run models)
 - `vercel-ai-sdk-docs/` (streaming + tools + agents reference)
 
 ---
@@ -16,7 +16,7 @@ It is written to be compatible with the current codebase:
 Build an **Agent Builder + Distributed Agent Runtime (Gateway)** that supports:
 
 - A shared-context network model:
-  - **Nexus** = timeline/context
+  - **SmartSpace** = timeline/context
   - **Entity** = human/agent/system identity
   - **Client** = connection surface (web, mobile, node backend, device)
 - Reliable execution:
@@ -27,7 +27,7 @@ Build an **Agent Builder + Distributed Agent Runtime (Gateway)** that supports:
   - Client tools (human-in-the-loop + client-side execution)
   - External tools (via MCP servers)
 - Persistence:
-  - Nexus timeline stored in Postgres
+  - SmartSpace timeline stored in Postgres
   - Run event stream stored in Postgres + Redis for realtime
 - Future features:
   - Plans (scheduled runs)
@@ -80,7 +80,7 @@ Build an **Agent Builder + Distributed Agent Runtime (Gateway)** that supports:
 
 From `hsafa-gateway-doc.mdx`:
 
-- **Nexus**
+- **SmartSpace**
   - Shared context space: a timeline of events/messages
   - Public or private
 - **Entity**
@@ -90,8 +90,8 @@ From `hsafa-gateway-doc.mdx`:
   - Connection surface (web/mobile/node/device)
   - Not an identity; it’s a channel
 - **Run**
-  - One execution of one Agent Entity inside one Nexus
-  - Triggered by a Nexus event (message, system event, schedule)
+  - One execution of one Agent Entity inside one SmartSpace
+  - Triggered by a SmartSpace event (message, system event, schedule)
 - **Step**
   - One LLM call within the run
 
@@ -102,9 +102,9 @@ From `hsafa-gateway-doc.mdx`:
 Your `schema.prisma` already contains the *right high-level* tables:
 
 - `Entity` (human/agent/system)
-- `Nexus`
-- `NexusMembership`
-- `NexusMessage` (timeline)
+- `SmartSpace`
+- `SmartSpaceMembership`
+- `SmartSpaceMessage` (timeline)
 - `Agent` (agent config with `configJson`)
 - `Run`
 - `RunEvent`
@@ -119,7 +119,7 @@ Your `schema.prisma` already contains the *right high-level* tables:
 The current `hsafa-gateway/src` code is partly from the older “agent ↔ run” model and needs alignment:
 
 - **Run fields mismatch**
-  - Schema: `Run(nexusId, agentEntityId, agentId, triggeredById, parentRunId, ...)`
+  - Schema: `Run(smartSpaceId, agentEntityId, agentId, triggeredById, parentRunId, ...)`
   - Current code uses: `Run(agentId, ...)`
 - **ToolExecutionTarget mismatch**
   - Schema enum: `server | client | external`
@@ -158,8 +158,8 @@ Current code already supports this:
 
 Responsible for:
 
-- Managing Nexuses and memberships
-- Accepting a Nexus event (e.g. a human message)
+- Managing SmartSpaces and memberships
+- Accepting a SmartSpace event (e.g. a human message)
 - Creating Runs for eligible Agent Entities
 - Executing the agent loop (LLM + tools)
 - Streaming events
@@ -169,33 +169,33 @@ Responsible for:
 
 ## 6) Data Flow (end-to-end)
 
-### 6.1 Human message triggers agents in a Nexus
+### 6.1 Human message triggers agents in a SmartSpace
 
-1. Client posts a message to the Nexus
-2. Gateway writes a `NexusMessage` (seq ordered)
-3. Gateway finds Agent Entities that are members of that Nexus
+1. Client posts a message to the SmartSpace
+2. Gateway writes a `SmartSpaceMessage` (seq ordered)
+3. Gateway finds Agent Entities that are members of that SmartSpace
 4. For each Agent Entity, gateway creates a `Run`:
-   - `nexusId = the nexus`
+   - `smartSpaceId = the smart space`
    - `agentEntityId = that agent entity`
    - `agentId = agent config`
    - `triggeredById = human entity`
    - `status = queued`
 5. Gateway executes each Run (async background)
 6. Gateway emits `RunEvent` records and streams them
-7. Agent may append new `NexusMessage` entries as it responds
+7. Agent may append new `SmartSpaceMessage` entries as it responds
 
-### 6.2 Cross-Nexus execution (leave request example)
+### 6.2 Cross-SmartSpace execution (leave request example)
 
-- A Run can create a child Run in a different Nexus
+- A Run can create a child Run in a different SmartSpace
 - Link with `parentRunId`
 - Always write “origin metadata”:
-  - `Run.metadata.origin = { fromRunId, fromNexusId, intent }`
+  - `Run.metadata.origin = { fromRunId, fromSmartSpaceId, intent }`
 
 ---
 
-## 7) API Surface (Nexus-Centric Design)
+## 7) API Surface (SmartSpace-Centric Design)
 
-The API is **Nexus-centric**: you subscribe to a Nexus to see all activity, send messages to a Nexus, and respond to tools via the Nexus.
+The API is **SmartSpace-centric**: you subscribe to a SmartSpace to see all activity, send messages to a SmartSpace, and respond to tools via the SmartSpace.
 
 All endpoints are available via **REST API**, **SDKs** (React, React Native, Node), and **CLI**.
 
@@ -203,7 +203,7 @@ All endpoints are available via **REST API**, **SDKs** (React, React Native, Nod
 
 ### 7.1 Agents (Control Plane)
 
-Agents are config definitions. An Agent Entity is created when you want an agent to participate in Nexuses.
+Agents are config definitions. An Agent Entity is created when you want an agent to participate in SmartSpaces.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -216,7 +216,7 @@ Agents are config definitions. An Agent Entity is created when you want an agent
 
 ### 7.2 Entities
 
-Entities are identities (human, agent, system) that can participate in Nexuses.
+Entities are identities (human, agent, system) that can participate in SmartSpaces.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -248,19 +248,19 @@ Entities are identities (human, agent, system) that can participate in Nexuses.
 
 ---
 
-### 7.3 Nexuses
+### 7.3 SmartSpaces
 
-Nexuses are shared context spaces. This is the **primary interaction point**.
+SmartSpaces are shared context spaces. This is the **primary interaction point**.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/nexuses` | Create a Nexus |
-| `GET` | `/api/nexuses` | List Nexuses (for current entity) |
-| `GET` | `/api/nexuses/:nexusId` | Get Nexus details |
-| `PATCH` | `/api/nexuses/:nexusId` | Update Nexus (name, visibility) |
-| `DELETE` | `/api/nexuses/:nexusId` | Delete Nexus |
+| `POST` | `/api/smart-spaces` | Create a SmartSpace |
+| `GET` | `/api/smart-spaces` | List SmartSpaces (for current entity) |
+| `GET` | `/api/smart-spaces/:smartSpaceId` | Get SmartSpace details |
+| `PATCH` | `/api/smart-spaces/:smartSpaceId` | Update SmartSpace (name, visibility) |
+| `DELETE` | `/api/smart-spaces/:smartSpaceId` | Delete SmartSpace |
 
-**Create Nexus request:**
+**Create SmartSpace request:**
 ```json
 {
   "name": "Project Chat",
@@ -271,16 +271,16 @@ Nexuses are shared context spaces. This is the **primary interaction point**.
 
 ---
 
-### 7.4 Nexus Membership
+### 7.4 SmartSpace Membership
 
-Manage who can participate in a Nexus.
+Manage who can participate in a SmartSpace.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/nexuses/:nexusId/members` | Add entity to Nexus |
-| `GET` | `/api/nexuses/:nexusId/members` | List Nexus members |
-| `DELETE` | `/api/nexuses/:nexusId/members/:entityId` | Remove entity from Nexus |
-| `PATCH` | `/api/nexuses/:nexusId/members/:entityId` | Update membership (role, permissions) |
+| `POST` | `/api/smart-spaces/:smartSpaceId/members` | Add entity to SmartSpace |
+| `GET` | `/api/smart-spaces/:smartSpaceId/members` | List SmartSpace members |
+| `DELETE` | `/api/smart-spaces/:smartSpaceId/members/:entityId` | Remove entity from SmartSpace |
+| `PATCH` | `/api/smart-spaces/:smartSpaceId/members/:entityId` | Update membership (role, permissions) |
 
 **Add member request:**
 ```json
@@ -293,14 +293,14 @@ Manage who can participate in a Nexus.
 
 ---
 
-### 7.5 Nexus Messages
+### 7.5 SmartSpace Messages
 
-Send and read messages in a Nexus. Posting a message **triggers Agent Runs**.
+Send and read messages in a SmartSpace. Posting a message **triggers Agent Runs**.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/nexuses/:nexusId/messages` | Send message (triggers agents) |
-| `GET` | `/api/nexuses/:nexusId/messages` | Get message history |
+| `POST` | `/api/smart-spaces/:smartSpaceId/messages` | Send message (triggers agents) |
+| `GET` | `/api/smart-spaces/:smartSpaceId/messages` | Get message history |
 
 **Send message request:**
 ```json
@@ -318,20 +318,20 @@ Send and read messages in a Nexus. Posting a message **triggers Agent Runs**.
 
 ---
 
-### 7.6 Nexus Streaming (Primary)
+### 7.6 SmartSpace Streaming (Primary)
 
-**Subscribe to a Nexus** to receive all real-time events (messages, runs, tool calls).
+**Subscribe to a SmartSpace** to receive all real-time events (messages, runs, tool calls).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/nexuses/:nexusId/stream` | SSE stream of all Nexus activity |
+| `GET` | `/api/smart-spaces/:smartSpaceId/stream` | SSE stream of all SmartSpace activity |
 
 **Query params:**
 - `entityId` - required, identifies the subscribing entity
 - `afterSeq` - resume from sequence number (reconnect support)
 
 **Events streamed:**
-- `nexus.message` - new message in the Nexus
+- `smartSpace.message` - new message in the SmartSpace
 - `run.created` - agent run started
 - `run.started` - agent is executing
 - `run.waiting_tool` - agent waiting for tool response
@@ -345,11 +345,11 @@ Send and read messages in a Nexus. Posting a message **triggers Agent Runs**.
 
 ### 7.7 Tool Responses
 
-Respond to tool calls via the Nexus. You must be a member of the Nexus.
+Respond to tool calls via the SmartSpace. You must be a member of the SmartSpace.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/nexuses/:nexusId/tool-results` | Submit tool result |
+| `POST` | `/api/smart-spaces/:smartSpaceId/tool-results` | Submit tool result |
 
 **Request:**
 ```json
@@ -369,7 +369,7 @@ Runs are created automatically when agents are triggered. These endpoints are fo
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/runs` | List runs (filter by nexusId, agentEntityId) |
+| `GET` | `/api/runs` | List runs (filter by smartSpaceId, agentEntityId) |
 | `GET` | `/api/runs/:runId` | Get run details |
 | `GET` | `/api/runs/:runId/events` | Get all run events |
 | `GET` | `/api/runs/:runId/stream` | SSE stream for specific run |
@@ -415,35 +415,35 @@ Every SDK (React, React Native, Node) should expose:
 - `createEntity({ type, externalId, displayName })` / `deleteEntity(entityId)`
 - `createAgentEntity({ agentId, displayName })` / `listEntities()`
 
-**Nexuses:**
-- `createNexus({ name, visibility })` / `deleteNexus(nexusId)`
-- `listNexuses()` / `getNexus(nexusId)`
-- `addMember(nexusId, entityId)` / `removeMember(nexusId, entityId)`
-- `listMembers(nexusId)`
+**SmartSpaces:**
+- `createSmartSpace({ name, visibility })` / `deleteSmartSpace(smartSpaceId)`
+- `listSmartSpaces()` / `getSmartSpace(smartSpaceId)`
+- `addMember(smartSpaceId, entityId)` / `removeMember(smartSpaceId, entityId)`
+- `listMembers(smartSpaceId)`
 
 **Messaging:**
-- `sendMessage(nexusId, { content, entityId })`
-- `getMessages(nexusId, { afterSeq, limit })`
+- `sendMessage(smartSpaceId, { content, entityId })`
+- `getMessages(smartSpaceId, { afterSeq, limit })`
 
 **Streaming:**
-- `subscribeToNexus(nexusId, entityId, callbacks)` - returns unsubscribe function
+- `subscribeToSmartSpace(smartSpaceId, entityId, callbacks)` - returns unsubscribe function
 - Callbacks: `onMessage`, `onTextDelta`, `onToolCall`, `onRunStart`, `onRunEnd`, `onError`
 
 **Tool responses:**
-- `submitToolResult(nexusId, { toolCallId, entityId, result })`
+- `submitToolResult(smartSpaceId, { toolCallId, entityId, result })`
 
 ---
 
 ## 8) Streaming & Reconnect Strategy
 
-### 8.1 Nexus-Level Streaming (Primary)
+### 8.1 SmartSpace-Level Streaming (Primary)
 
-The primary streaming model is **Nexus-level**: subscribe to a Nexus to see all activity.
+The primary streaming model is **SmartSpace-level**: subscribe to a SmartSpace to see all activity.
 
-**Endpoint:** `GET /api/nexuses/:nexusId/stream?entityId=X&afterSeq=Y`
+**Endpoint:** `GET /api/smart-spaces/:smartSpaceId/stream?entityId=X&afterSeq=Y`
 
-**Why Nexus-level?**
-- See all agent activity in a context (multiple agents can be in one Nexus)
+**Why SmartSpace-level?**
+- See all agent activity in a context (multiple agents can be in one SmartSpace)
 - See messages from all participants
 - Single subscription for everything happening in that context
 
@@ -475,16 +475,16 @@ This is useful for:
 
 Both streams support reconnection:
 
-- **Nexus stream:** pass `afterSeq` (sequence number) to resume
+- **SmartSpace stream:** pass `afterSeq` (sequence number) to resume
 - **Run stream:** pass `since` (Redis stream ID) to resume
 - SSE `Last-Event-ID` header also works
 
 ### 8.4 Event Types (Canonical)
 
-**Nexus-level events:**
-- `nexus.message` - new message in the Nexus
-- `nexus.member.joined` - entity joined
-- `nexus.member.left` - entity left
+**SmartSpace-level events:**
+- `smartSpace.message` - new message in the SmartSpace
+- `smartSpace.member.joined` - entity joined
+- `smartSpace.member.left` - entity left
 
 **Run lifecycle:**
 - `run.created` - run was created
@@ -499,7 +499,7 @@ Both streams support reconnection:
 - `step.start` / `step.finish` - LLM call boundaries
 
 **Tool events:**
-- `tool.call` - agent called a tool (any Nexus member can respond)
+- `tool.call` - agent called a tool (any SmartSpace member can respond)
 - `tool.result` - tool result received
 
 **Message events:**
@@ -562,55 +562,55 @@ hsafa entity list --type agent
 hsafa entity delete <entityId>
 ```
 
-### Nexus Commands
+### SmartSpace Commands
 
 ```bash
-# Create nexus
-hsafa nexus create --name "Project Chat" --visibility private
+# Create smart space
+hsafa smart-space create --name "Project Chat" --visibility private
 
-# List nexuses
-hsafa nexus list
+# List smart spaces
+hsafa smart-space list
 
-# Get nexus details
-hsafa nexus get <nexusId>
+# Get smart space details
+hsafa smart-space get <smartSpaceId>
 
-# Delete nexus
-hsafa nexus delete <nexusId>
+# Delete smart space
+hsafa smart-space delete <smartSpaceId>
 
 # Manage members
-hsafa nexus add-member <nexusId> <entityId>
-hsafa nexus remove-member <nexusId> <entityId>
-hsafa nexus list-members <nexusId>
+hsafa smart-space add-member <smartSpaceId> <entityId>
+hsafa smart-space remove-member <smartSpaceId> <entityId>
+hsafa smart-space list-members <smartSpaceId>
 ```
 
 ### Messaging Commands
 
 ```bash
-# Send message to nexus
-hsafa message send <nexusId> --entity <entityId> --content "Hello!"
+# Send message to smart space
+hsafa message send <smartSpaceId> --entity <entityId> --content "Hello!"
 
 # Get message history
-hsafa message list <nexusId> --limit 50
+hsafa message list <smartSpaceId> --limit 50
 ```
 
 ### Streaming Commands
 
 ```bash
-# Subscribe to nexus (interactive mode)
-hsafa stream nexus <nexusId> --entity <entityId>
+# Subscribe to smart space (interactive mode)
+hsafa stream smart-space <smartSpaceId> --entity <entityId>
 
 # Subscribe to specific run
 hsafa stream run <runId>
 
 # Watch mode with formatted output
-hsafa stream nexus <nexusId> --entity <entityId> --format pretty
+hsafa stream smart-space <smartSpaceId> --entity <entityId> --format pretty
 ```
 
 ### Tool Response Commands
 
 ```bash
-# Submit tool result (any Nexus member can respond to tool calls)
-hsafa tool respond <nexusId> --call-id <toolCallId> --entity <entityId> --result '{"approved": true}'
+# Submit tool result (any SmartSpace member can respond to tool calls)
+hsafa tool respond <smartSpaceId> --call-id <toolCallId> --entity <entityId> --result '{"approved": true}'
 ```
 
 ### Quick Start Example
@@ -627,18 +627,18 @@ hsafa entity create --type human --external-id me --name "Me"
 hsafa entity create-agent --agent-id abc123 --name "My Assistant"
 # Returns: entityId=agent-xyz
 
-# 3. Create a nexus and add members
-hsafa nexus create --name "My Chat"
-# Returns: nexusId=nexus-xyz
+# 3. Create a smart space and add members
+hsafa smart-space create --name "My Chat"
+# Returns: smartSpaceId=space-xyz
 
-hsafa nexus add-member nexus-xyz user-xyz
-hsafa nexus add-member nexus-xyz agent-xyz
+hsafa smart-space add-member space-xyz user-xyz
+hsafa smart-space add-member space-xyz agent-xyz
 
-# 4. Subscribe to the nexus (in one terminal)
-hsafa stream nexus nexus-xyz --entity user-xyz --format pretty
+# 4. Subscribe to the smart space (in one terminal)
+hsafa stream smart-space space-xyz --entity user-xyz --format pretty
 
 # 5. Send a message (in another terminal)
-hsafa message send nexus-xyz --entity user-xyz --content "Hello, assistant!"
+hsafa message send space-xyz --entity user-xyz --content "Hello, assistant!"
 
 # The agent will respond, and you'll see it in the stream
 ```
@@ -654,7 +654,7 @@ To execute a Run, the runner must load:
 - `Run`
 - `Agent.configJson`
 - **Context messages**:
-  - In the Nexus model: load recent `NexusMessage` for `run.nexusId`
+  - In the SmartSpace model: load recent `SmartSpaceMessage` for `run.smartSpaceId`
   - Also include any run-specific tool messages/results
 
 ### 9.2 Message format recommendation
@@ -666,7 +666,7 @@ Standardize on **AI SDK UI Message** structure internally (the same shape your R
 
 Then you can:
 
-- persist to `NexusMessage.metadata` as JSON
+- persist to `SmartSpaceMessage.metadata` as JSON
 - convert to model messages via `convertToModelMessages(...)`
 
 ### 9.3 Running the agent
@@ -712,11 +712,11 @@ When `ToolResult` arrives:
 Add `visibility` to tool calls (in `ToolCall` metadata):
 
 - `internal` (Main Tools)
-  - never written into the Nexus timeline
+  - never written into the SmartSpace timeline
   - only stored as Run events
 - `entity-visible`
-  - written into the Nexus timeline as an assistant tool-call part
-  - any Nexus member can see and respond
+  - written into the SmartSpace timeline as an assistant tool-call part
+  - any SmartSpace member can see and respond
 
 ### 10.2 Execution target
 
@@ -737,18 +737,18 @@ Two categories:
 
 ---
 
-## 11) Nexus Timeline Persistence
+## 11) SmartSpace Timeline Persistence
 
-`NexusMessage` should be the canonical timeline.
+`SmartSpaceMessage` should be the canonical timeline.
 
 ### 11.1 Sequencing
 
-Schema uses `seq BigInt` unique per `nexusId`.
+Schema uses `seq BigInt` unique per `smartSpaceId`.
 
 Implementation approach:
 
 - Use a Postgres transaction:
-  - `SELECT max(seq) FOR UPDATE` for that nexus
+  - `SELECT max(seq) FOR UPDATE` for that smart space
   - insert new message with `seq = max + 1`
 
 ### 11.2 Mapping messages
@@ -777,7 +777,7 @@ Scheduler worker options:
 Flow:
 
 - Scheduler finds due plans (`nextRunAt <= now AND status=active`)
-- Scheduler writes a Nexus event or directly creates a Run
+- Scheduler writes a SmartSpace event or directly creates a Run
 
 ### 12.2 Goals
 
@@ -807,8 +807,114 @@ Even for MVP, define:
   - stable `clientKey` signed into a token
   - never trust `clientKey` without verification
 - **Authorization**
-  - only members of a Nexus can read/write
-  - private Nexuses must enforce membership checks
+  - only members of a SmartSpace can read/write
+  - private SmartSpaces must enforce membership checks
+
+### 13.1 Authentication Patterns
+
+The Gateway supports two authentication patterns depending on the caller type:
+
+#### Pattern A: User via React SDK (JWT passthrough)
+
+For browser/mobile clients, the user's existing JWT is passed directly to the Gateway:
+
+```
+┌─────────────────┐                    ┌─────────────┐
+│   React SDK     │ ──────────────────▶│   Gateway   │
+│   (browser)     │   Authorization:   │             │
+│                 │   Bearer <userJWT> │  verifies   │
+└─────────────────┘                    └─────────────┘
+```
+
+**How it works:**
+
+1. User logs into the app (Auth0, Firebase, Supabase, Clerk, etc.)
+2. App receives a JWT for the user
+3. React SDK sends that JWT in every request to Gateway
+4. Gateway verifies the JWT and extracts user identity
+5. Gateway maps JWT `sub` claim → `Entity.externalId`
+
+**SDK usage:**
+
+```tsx
+useHsafaGateway({
+  gatewayUrl: 'https://gateway.example.com',
+  agentId: 'my-agent',
+  authToken: userJwt,  // user's JWT from their auth provider
+});
+```
+
+**Gateway config (per tenant/app):**
+
+```ts
+{
+  // Option 1: JWKS URL (recommended for Auth0, Firebase, Cognito, Clerk)
+  jwksUrl: "https://your-auth-domain/.well-known/jwks.json",
+  
+  // Option 2: Shared secret (for Supabase, custom JWT)
+  jwtSecret: "your-jwt-secret",
+  
+  // Claim mapping
+  userIdClaim: "sub",  // which claim contains the user ID
+  issuer: "https://your-auth-domain/",  // optional: validate issuer
+}
+```
+
+**Supported auth services:**
+
+| Service | Verification method |
+|---------|---------------------|
+| Auth0 | JWKS: `https://YOUR_DOMAIN/.well-known/jwks.json` |
+| Firebase | JWKS: `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com` |
+| Supabase | JWT secret from project settings |
+| Clerk | JWKS from dashboard |
+| AWS Cognito | JWKS: `https://cognito-idp.{region}.amazonaws.com/{userPoolId}/.well-known/jwks.json` |
+| Keycloak | JWKS: `https://{host}/realms/{realm}/protocol/openid-connect/certs` |
+| Custom | Your own secret or key pair |
+
+#### Pattern B: Service/Robot (direct API key)
+
+For backend services, robots, or Node.js apps, use a Gateway API key directly:
+
+```
+┌─────────────────┐                    ┌─────────────┐
+│   Node.js       │ ──────────────────▶│   Gateway   │
+│   Service       │   Authorization:   │             │
+│                 │   Bearer <apiKey>  │  trusts     │
+└─────────────────┘   + entityId       └─────────────┘
+```
+
+**How it works:**
+
+1. Service has a Gateway API key (stored securely in env vars)
+2. Service calls Gateway with API key + its own `entityExternalId`
+3. Gateway trusts the API key and maps the entity
+
+**Service usage:**
+
+```ts
+await fetch(`${GATEWAY_URL}/api/runs/${runId}/messages`, {
+  headers: {
+    'Authorization': `Bearer ${process.env.GATEWAY_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    message,
+    entityExternalId: 'service_scheduler_01',  // system entity ID
+  }),
+});
+```
+
+### 13.2 Identity Summary
+
+| Caller | Auth method | Entity mapping |
+|--------|-------------|----------------|
+| Browser/React SDK | User's JWT | JWT `sub` → `Entity.externalId` |
+| Mobile app | User's JWT | JWT `sub` → `Entity.externalId` |
+| Node.js service | Gateway API key | Request body `entityExternalId` |
+| Robot/IoT | Gateway API key | Request body `entityExternalId` |
+
+**Key principle:** The browser never sees the Gateway API key. Users authenticate with their existing auth provider, and the Gateway verifies their JWT directly.
 
 ---
 
@@ -816,18 +922,18 @@ Even for MVP, define:
 
 ### Phase 1 — Align runtime with schema (must-do)
 
-- Replace `agentId`-centric Run creation with Nexus model:
+- Replace `agentId`-centric Run creation with SmartSpace model:
   - create `Entity` for agents
-  - create `Nexus` and memberships
-  - create `Run` with `nexusId` + `agentEntityId`
+  - create `SmartSpace` and memberships
+  - create `Run` with `smartSpaceId` + `agentEntityId`
 - Standardize ToolExecutionTarget:
   - use `server | client | external`
 - Fix WebSocket connection to use `Client` model
 
-### Phase 2 — Nexus APIs + Triggering
+### Phase 2 — SmartSpace APIs + Triggering
 
-- Add `/api/nexuses/*` endpoints
-- Implement `POST /api/nexuses/:id/messages` trigger logic
+- Add `/api/smart-spaces/*` endpoints
+- Implement `POST /api/smart-spaces/:id/messages` trigger logic
 
 ### Phase 3 — Distributed tools (client execution)
 
@@ -866,8 +972,8 @@ Even for MVP, define:
 
 ## 16) Definition of Done (MVP)
 
-- You can create a Nexus, add Entities, and post a user message
-- Agent Entities in that Nexus trigger Runs
+- You can create a SmartSpace, add Entities, and post a user message
+- Agent Entities in that SmartSpace trigger Runs
 - Runs stream incremental events to the UI with reconnect support
 - Tools can execute:
   - on server

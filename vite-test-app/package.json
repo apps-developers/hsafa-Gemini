@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.12.5",
     "@hsafa/react-sdk": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"

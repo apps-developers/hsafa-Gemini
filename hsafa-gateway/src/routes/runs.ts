@@ -1,32 +1,36 @@
 import { Router, Request, Response, type Router as ExpressRouter } from 'express';
-import { convertToModelMessages } from 'ai';
 import { Prisma } from '@prisma/client';
 import { redis } from '../lib/redis.js';
 import { prisma } from '../lib/db.js';
-import { createEmitEvent, loadRunMessages, toSSEEvent, handleRunError, type EmitEventFn } from '../lib/run-events.js';
-import { buildAgent, AgentBuildError } from '../agent-builder/builder.js';
-import { closeMCPClients, type MCPClientWrapper } from '../agent-builder/mcp-resolver.js';
-import type { AgentConfig } from '../agent-builder/types.js';
+import { createEmitEvent, toSSEEvent } from '../lib/run-events.js';
+import { executeRun } from '../lib/run-runner.js';
+import { submitToolResult } from '../lib/tool-results.js';
+import { emitSmartSpaceEvent } from '../lib/smartspace-events.js';
 
 export const runsRouter: ExpressRouter = Router();
 
-// GET /api/runs - List runs for an agent
+// GET /api/runs - List runs (debugging/history)
 runsRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const { agentId, limit = '50', offset = '0' } = req.query;
+    const { agentId, agentEntityId, smartSpaceId, status, limit = '50', offset = '0' } = req.query;
 
-    if (!agentId || typeof agentId !== 'string') {
-      return res.status(400).json({ error: 'Missing required query param: agentId' });
-    }
+    const where: Prisma.RunWhereInput = {};
+    if (typeof agentId === 'string') where.agentId = agentId;
+    if (typeof agentEntityId === 'string') where.agentEntityId = agentEntityId;
+    if (typeof smartSpaceId === 'string') where.smartSpaceId = smartSpaceId;
+    if (typeof status === 'string') (where as any).status = status;
 
     const runs = await prisma.run.findMany({
-      where: { agentId },
+      where,
       orderBy: { createdAt: 'desc' },
       take: Math.min(parseInt(limit as string) || 50, 100),
       skip: parseInt(offset as string) || 0,
       select: {
         id: true,
         status: true,
+        smartSpaceId: true,
+        agentEntityId: true,
+        agentId: true,
         createdAt: true,
         completedAt: true,
       },
@@ -42,79 +46,60 @@ runsRouter.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/runs - Create a new run and start agent execution
+// POST /api/runs - Create a new run (debugging)
 runsRouter.post('/', async (req: Request, res: Response) => {
-  const { agentId, agentVersionId: providedVersionId, initialMessages, metadata } = req.body;
-
-  if (!agentId) {
-    return res.status(400).json({ error: 'Missing required field: agentId' });
-  }
-
   try {
-    let agentVersion;
+    const { smartSpaceId, agentEntityId, agentId, triggeredById, parentRunId, metadata, start = true } = req.body;
 
-    if (providedVersionId) {
-      // Use specific version if provided
-      agentVersion = await prisma.agentVersion.findUnique({
-        where: { id: providedVersionId },
-        include: { agent: true },
-      });
-
-      if (!agentVersion || agentVersion.agentId !== agentId) {
-        return res.status(404).json({ error: 'Agent version not found or does not match agentId' });
-      }
-    } else {
-      // Auto-select latest version
-      agentVersion = await prisma.agentVersion.findFirst({
-        where: { agentId },
-        orderBy: { createdAt: 'desc' },
-        include: { agent: true },
-      });
-
-      if (!agentVersion) {
-        return res.status(404).json({ error: 'No versions found for this agent' });
-      }
+    if (!smartSpaceId || typeof smartSpaceId !== 'string') {
+      return res.status(400).json({ error: 'Missing required field: smartSpaceId' });
+    }
+    if (!agentEntityId || typeof agentEntityId !== 'string') {
+      return res.status(400).json({ error: 'Missing required field: agentEntityId' });
     }
 
-    const agentVersionId = agentVersion.id;
+    let finalAgentId: string | null = typeof agentId === 'string' ? agentId : null;
+    if (!finalAgentId) {
+      const entity = await prisma.entity.findUnique({
+        where: { id: agentEntityId },
+        select: { agentId: true, type: true },
+      });
+      if (!entity || entity.type !== 'agent' || !entity.agentId) {
+        return res.status(400).json({ error: 'agentEntityId must reference an agent Entity with agentId set' });
+      }
+      finalAgentId = entity.agentId;
+    }
 
-    // Create run record
     const run = await prisma.run.create({
       data: {
-        agentId,
-        agentVersionId,
+        smartSpaceId,
+        agentEntityId,
+        agentId: finalAgentId,
+        triggeredById: typeof triggeredById === 'string' ? triggeredById : null,
+        parentRunId: typeof parentRunId === 'string' ? parentRunId : null,
+        metadata: (metadata ?? null) as Prisma.InputJsonValue,
         status: 'queued',
       },
+      select: { id: true },
     });
 
     const runId = run.id;
     const { emitEvent } = await createEmitEvent(runId);
+    await emitEvent('run.created', { runId, smartSpaceId, agentEntityId, agentId: finalAgentId, status: 'queued' });
+    await emitSmartSpaceEvent(
+      smartSpaceId,
+      'run.created',
+      { runId, smartSpaceId, agentEntityId, agentId: finalAgentId, status: 'queued' },
+      { runId, agentEntityId }
+    );
 
-    await emitEvent('run.created', { runId, agentId, agentVersionId, status: 'queued', metadata: metadata ?? null });
-
-    // If we have initial messages, start execution immediately.
-    if (Array.isArray(initialMessages) && initialMessages.length > 0) {
-      // Persist the initial messages as message events (best-effort)
-      for (const m of initialMessages) {
-        if (!m || typeof m !== 'object') continue;
-        const role = (m as any).role;
-        if (role !== 'user' && role !== 'assistant') continue;
-        await emitEvent(role === 'user' ? 'message.user' : 'message.assistant', {
-          message: m,
-        });
-      }
-
-      executeAgentRun(runId, agentVersion.configJson as AgentConfig, initialMessages, emitEvent).catch(
-        (error) => handleRunError(runId, error, emitEvent)
-      );
+    if (start !== false) {
+      executeRun(runId).catch(() => {
+        // errors are handled inside executeRun
+      });
     }
 
-    // Return immediately with run info
-    res.status(201).json({
-      runId,
-      streamUrl: `/api/runs/${runId}/stream`,
-      status: 'queued',
-    });
+    return res.status(201).json({ runId, status: 'queued', streamUrl: `/api/runs/${runId}/stream` });
   } catch (error) {
     console.error('[POST /api/runs] Error:', error);
     res.status(500).json({
@@ -124,302 +109,33 @@ runsRouter.post('/', async (req: Request, res: Response) => {
   }
 });
 
-runsRouter.post('/:runId/messages', async (req: Request, res: Response) => {
-  const { runId } = req.params;
-  const { message, senderId, senderName } = req.body;
-
-  if (!message || typeof message !== 'object') {
-    return res.status(400).json({ error: 'Missing or invalid message' });
-  }
-
+runsRouter.post('/:runId/cancel', async (req: Request, res: Response) => {
   try {
+    const { runId } = req.params;
     const run = await prisma.run.findUnique({ where: { id: runId } });
     if (!run) return res.status(404).json({ error: 'Run not found' });
 
-    const agentVersion = await prisma.agentVersion.findUnique({
-      where: { id: run.agentVersionId },
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'canceled') {
+      return res.json({ success: true, status: run.status });
+    }
+
+    await prisma.run.update({
+      where: { id: runId },
+      data: { status: 'canceled', completedAt: new Date() },
     });
-    if (!agentVersion) return res.status(404).json({ error: 'Agent version not found' });
 
     const { emitEvent } = await createEmitEvent(runId);
+    await emitEvent('run.canceled', { status: 'canceled' });
 
-    await emitEvent('message.user', {
-      senderId: senderId ?? null,
-      senderName: senderName ?? null,
-      message,
-    });
-
-    const history = await loadRunMessages(runId);
-
-    executeAgentRun(runId, agentVersion.configJson as AgentConfig, history, emitEvent).catch(
-      (error) => handleRunError(runId, error, emitEvent)
-    );
-
-    return res.status(202).json({ success: true });
+    return res.json({ success: true, status: 'canceled' });
   } catch (error) {
-    console.error('Post run message error:', error);
+    console.error('[POST /api/runs/:runId/cancel] Error:', error);
     return res.status(500).json({
-      error: 'Failed to append message',
+      error: 'Failed to cancel run',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 });
-
- runsRouter.get('/:runId/messages', async (req: Request, res: Response) => {
-   try {
-     const { runId } = req.params;
-
-     const run = await prisma.run.findUnique({ where: { id: runId } });
-     if (!run) return res.status(404).json({ error: 'Run not found' });
-
-     const messages = await loadRunMessages(runId);
-     return res.json({ messages });
-   } catch (error) {
-     console.error('Get run messages error:', error);
-     return res.status(500).json({
-       error: 'Failed to fetch messages',
-       message: error instanceof Error ? error.message : 'Unknown error',
-     });
-   }
- });
-
-// Background agent execution using fullStream
-async function executeAgentRun(
-  runId: string,
-  config: AgentConfig,
-  initialMessages: unknown[],
-  emitEvent: (type: string, payload: Record<string, unknown>) => Promise<void>
-): Promise<void> {
-  let mcpClients: MCPClientWrapper[] | undefined;
-
-  console.log(`[Run ${runId}] Starting agent execution...`);
-
-  try {
-    // Update run to running
-    await prisma.run.update({
-      where: { id: runId },
-      data: { status: 'running', startedAt: new Date() },
-    });
-    await emitEvent('run.started', { status: 'running' });
-
-    console.log(`[Run ${runId}] Building agent...`);
-    // Build agent
-    const built = await buildAgent({ config });
-    mcpClients = built.mcpClients;
-    console.log(`[Run ${runId}] Agent built successfully`);
-
-    // Convert messages to model format
-    const uiMessages = initialMessages.map((m: any, index: number) => {
-      if (m && typeof m === 'object' && Array.isArray(m.parts)) return m;
-      const role = typeof m?.role === 'string' ? m.role : 'user';
-      const content = typeof m?.content === 'string' ? m.content : '';
-      return {
-        id: typeof m?.id === 'string' ? m.id : `msg-${index}`,
-        role,
-        parts: [{ type: 'text', text: content }],
-      };
-    });
-
-    const modelMessages = await convertToModelMessages(uiMessages);
-    console.log(`[Run ${runId}] Messages converted, starting stream...`);
-
-    // Stream agent with fullStream
-    const streamResult = await built.agent.stream({ messages: modelMessages });
-    console.log(`[Run ${runId}] Stream started, iterating...`);
-
-    let stepIndex = 0;
-    let currentText = '';
-
-    for await (const part of streamResult.fullStream) {
-      console.log(`[Run ${runId}] Stream part:`, part.type);
-      switch (part.type) {
-        case 'start-step':
-          stepIndex++;
-          await emitEvent('step.start', { step: stepIndex });
-          break;
-
-        case 'text-delta':
-          currentText += part.text;
-          await emitEvent('text.delta', { delta: part.text });
-          break;
-
-        case 'reasoning-start':
-          await emitEvent('reasoning.start', {});
-          break;
-
-        case 'reasoning-delta':
-          await emitEvent('reasoning.delta', { delta: part.text });
-          break;
-
-        case 'tool-input-start':
-          await emitEvent('tool.input.start', {
-            toolCallId: part.id,
-            toolName: part.toolName,
-          });
-          break;
-
-        case 'tool-input-delta':
-          await emitEvent('tool.input.delta', {
-            toolCallId: part.id,
-            delta: part.delta,
-          });
-          break;
-
-        case 'tool-call': {
-          const input = 'input' in part ? part.input : {};
-          // Persist tool call to DB
-          const toolConfig = config.tools?.find((t) => t.name === part.toolName);
-          const executionTarget = 'executionTarget' in (toolConfig || {}) 
-            ? (toolConfig as { executionTarget?: string }).executionTarget 
-            : 'server';
-
-          await emitEvent('tool.call', {
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            args: input,
-            executionTarget,
-          });
-
-          await emitEvent('message.assistant', {
-            message: {
-              id: `msg-${Date.now()}-assistant-toolcall`,
-              role: 'assistant',
-              parts: [
-                {
-                  type: 'tool-call',
-                  toolCallId: part.toolCallId,
-                  toolName: part.toolName,
-                  input,
-                  state: 'input-available',
-                },
-              ],
-            },
-          });
-
-          await prisma.toolCall.create({
-            data: {
-              runId,
-              seq: BigInt(stepIndex),
-              callId: part.toolCallId,
-              toolName: part.toolName,
-              args: input as Prisma.InputJsonValue,
-              executionTarget: executionTarget as 'server' | 'device' | 'browser' | 'external',
-              status: 'requested',
-            },
-          });
-
-          if (executionTarget !== 'server') {
-            await prisma.run.update({
-              where: { id: runId },
-              data: { status: 'waiting_tool' },
-            });
-            await emitEvent('run.waiting_tool', {
-              status: 'waiting_tool',
-              toolCallId: part.toolCallId,
-              toolName: part.toolName,
-            });
-            return;
-          }
-          break;
-        }
-
-        case 'tool-result': {
-          const output = 'output' in part ? part.output : null;
-          await emitEvent('tool.result', {
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            result: output,
-          });
-
-          await emitEvent('message.tool', {
-            message: {
-              id: `msg-${Date.now()}-tool-${part.toolCallId}`,
-              role: 'tool',
-              parts: [
-                {
-                  type: 'tool-result',
-                  toolCallId: part.toolCallId,
-                  toolName: part.toolName,
-                  output,
-                  state: 'output-available',
-                },
-              ],
-            },
-          });
-
-          // Update tool call status and persist result
-          await prisma.toolCall.update({
-            where: { runId_callId: { runId, callId: part.toolCallId } },
-            data: { status: 'completed', completedAt: new Date() },
-          });
-
-          await prisma.toolResult.upsert({
-            where: { runId_callId: { runId, callId: part.toolCallId } },
-            create: {
-              runId,
-              callId: part.toolCallId,
-              result: (output ?? {}) as Prisma.InputJsonValue,
-              source: 'server',
-            },
-            update: {
-              result: (output ?? {}) as Prisma.InputJsonValue,
-            },
-          });
-          break;
-        }
-
-        case 'finish-step':
-          await emitEvent('step.finish', {
-            step: stepIndex,
-            finishReason: part.finishReason,
-            usage: part.usage,
-          });
-          break;
-
-        case 'finish':
-          await emitEvent('stream.finish', {
-            finishReason: part.finishReason,
-            usage: part.totalUsage,
-          });
-          break;
-
-        case 'error':
-          await emitEvent('stream.error', {
-            error: part.error instanceof Error ? part.error.message : String(part.error),
-          });
-          break;
-      }
-    }
-
-    // Get final text
-    const finalText = await streamResult.text;
-
-    // Update run to completed
-    await prisma.run.update({
-      where: { id: runId },
-      data: { status: 'completed', completedAt: new Date() },
-    });
-
-    await emitEvent('message.assistant', {
-      message: {
-        id: `msg-${Date.now()}-assistant`,
-        role: 'assistant',
-        parts: [{ type: 'text', text: finalText }],
-      },
-    });
-
-    await emitEvent('run.completed', { status: 'completed', text: finalText });
-  } catch (error) {
-    if (error instanceof AgentBuildError) {
-      await emitEvent('agent.build.error', { error: error.message });
-    }
-    throw error;
-  } finally {
-    if (mcpClients && mcpClients.length > 0) {
-      await closeMCPClients(mcpClients);
-    }
-  }
-}
 
 runsRouter.get('/:runId/stream', async (req: Request, res: Response) => {
   const { runId } = req.params;
@@ -563,7 +279,8 @@ runsRouter.get('/:runId', async (req: Request, res: Response) => {
       where: { id: runId },
       include: {
         agent: true,
-        agentVersion: true,
+        agentEntity: true,
+        smartSpace: true,
       },
     });
 
@@ -615,73 +332,21 @@ runsRouter.delete('/:runId', async (req: Request, res: Response) => {
 runsRouter.post('/:runId/tool-results', async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
-    const { callId, result, source } = req.body;
+    const { callId, result, source, clientId } = req.body;
 
-    const { emitEvent } = await createEmitEvent(runId);
-
-    const run = await prisma.run.findUnique({ where: { id: runId } });
-    if (!run) {
-      return res.status(404).json({ error: 'Run not found' });
+    if (!callId || typeof callId !== 'string') {
+      return res.status(400).json({ error: 'Missing required field: callId' });
     }
 
-    await prisma.toolResult.create({
-      data: {
-        runId,
-        callId,
-        result,
-        source: source || 'server',
-      },
-    });
-
-    await prisma.toolCall.update({
-      where: { runId_callId: { runId, callId } },
-      data: {
-        status: 'completed',
-        completedAt: new Date(),
-      },
-    });
-
-    const toolCall = await prisma.toolCall.findUnique({
-      where: { runId_callId: { runId, callId } },
-      select: { toolName: true, executionTarget: true },
-    });
-
-    await emitEvent('tool.result', {
-      toolCallId: callId,
-      toolName: toolCall?.toolName ?? null,
+    await submitToolResult({
+      runId,
+      callId,
       result,
+      source: source === 'client' || source === 'server' ? source : undefined,
+      clientId: typeof clientId === 'string' ? clientId : null,
     });
 
-    await emitEvent('message.tool', {
-      message: {
-        id: `msg-${Date.now()}-tool-${callId}`,
-        role: 'tool',
-        parts: [
-          {
-            type: 'tool-result',
-            toolCallId: callId,
-            toolName: toolCall?.toolName ?? null,
-            output: result,
-            state: 'output-available',
-          },
-        ],
-      },
-    });
-
-    if (toolCall?.executionTarget && toolCall.executionTarget !== 'server') {
-      const agentVersion = await prisma.agentVersion.findUnique({
-        where: { id: run.agentVersionId },
-      });
-
-      if (agentVersion) {
-        const history = await loadRunMessages(runId);
-        executeAgentRun(runId, agentVersion.configJson as AgentConfig, history, emitEvent).catch(
-          (error) => handleRunError(runId, error, emitEvent)
-        );
-      }
-    }
-
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (error) {
     console.error('Post tool result error:', error);
     res.status(500).json({

@@ -2,107 +2,105 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from 'http';
 import { redis } from './redis.js';
 import { prisma } from './db.js';
+import { submitToolResult } from './tool-results.js';
 
-interface DeviceConnection {
+interface ClientConnection {
   ws: WebSocket;
-  deviceId: string;
+  clientId: string;
 }
 
-const deviceConnections = new Map<string, DeviceConnection>();
+const clientConnections = new Map<string, ClientConnection>();
 
 export function setupWebSocketServer(server: Server) {
   const wss = new WebSocketServer({ 
     server,
-    path: '/devices/connect'
+    path: '/api/clients/connect'
   });
 
   wss.on('connection', async (ws: WebSocket) => {
-    let deviceConnection: DeviceConnection | null = null;
+    let clientConnection: ClientConnection | null = null;
 
     ws.on('message', async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
 
         switch (message.type) {
-          case 'device.register': {
-            const { deviceKey, displayName, capabilities } = message.data;
+          case 'client.register': {
+            const { entityId, clientKey, clientType, displayName, capabilities } = message.data ?? {};
 
-            // Auto-create or update device on first connection
-            const device = await prisma.device.upsert({
-              where: { deviceKey },
+            if (!entityId || typeof entityId !== 'string') {
+              ws.send(JSON.stringify({ type: 'error', error: 'Missing required field: entityId' }));
+              return;
+            }
+            if (!clientKey || typeof clientKey !== 'string') {
+              ws.send(JSON.stringify({ type: 'error', error: 'Missing required field: clientKey' }));
+              return;
+            }
+
+            const client = await prisma.client.upsert({
+              where: { clientKey },
               create: {
-                deviceKey,
-                displayName,
-                capabilities: capabilities || {},
+                entityId,
+                clientKey,
+                clientType: typeof clientType === 'string' ? clientType : null,
+                displayName: typeof displayName === 'string' ? displayName : null,
+                capabilities: (capabilities && typeof capabilities === 'object' ? capabilities : {}) as any,
                 lastSeenAt: new Date(),
               },
               update: {
-                displayName,  // Update name if changed
-                capabilities: capabilities || undefined,
+                entityId,
+                clientType: typeof clientType === 'string' ? clientType : undefined,
+                displayName: typeof displayName === 'string' ? displayName : undefined,
+                capabilities: (capabilities && typeof capabilities === 'object' ? capabilities : undefined) as any,
                 lastSeenAt: new Date(),
               },
             });
 
-            deviceConnection = {
-              ws,
-              deviceId: device.id,
-            };
+            clientConnection = { ws, clientId: client.id };
+            clientConnections.set(client.id, clientConnection);
 
-            deviceConnections.set(device.id, deviceConnection);
+            ws.send(
+              JSON.stringify({
+                type: 'client.registered',
+                data: {
+                  clientId: client.id,
+                },
+              })
+            );
 
-            ws.send(JSON.stringify({
-              type: 'device.registered',
-              data: {
-                deviceId: device.id,
-              },
-            }));
+            await redis.setex(`client:${client.id}:presence`, 60, 'online');
 
-            await redis.setex(`device:${device.id}:presence`, 60, 'online');
-
-            console.log(`✅ Device connected: ${deviceKey} (${device.id})`);
+            console.log(`✅ Client connected: ${clientKey} (${client.id})`);
             break;
           }
 
           case 'tool.result': {
             const { runId, callId, result } = message.data;
 
-            await prisma.toolResult.create({
-              data: {
-                runId,
-                callId,
-                result,
-                source: 'device',
-              },
+            if (!runId || typeof runId !== 'string' || !callId || typeof callId !== 'string') {
+              ws.send(JSON.stringify({ type: 'error', error: 'Missing required fields: runId, callId' }));
+              return;
+            }
+
+            await submitToolResult({
+              runId,
+              callId,
+              result,
+              source: 'client',
+              clientId: clientConnection?.clientId ?? null,
             });
-
-            await prisma.toolCall.update({
-              where: { runId_callId: { runId, callId } },
-              data: {
-                status: 'completed',
-                completedAt: new Date(),
-              },
-            });
-
-            await redis.xadd(
-              `run:${runId}:stream`,
-              '*',
-              'type', 'tool.result.received',
-              'ts', new Date().toISOString(),
-              'payload', JSON.stringify({ callId, result })
-            );
-
-            await redis.publish(
-              `run:${runId}:notify`,
-              JSON.stringify({ type: 'tool.result.received', callId })
-            );
 
             console.log(`✅ Tool result received: ${callId}`);
             break;
           }
 
           case 'ping': {
-            if (deviceConnection) {
-              await redis.setex(`device:${deviceConnection.deviceId}:presence`, 60, 'online');
+            if (clientConnection) {
+              await redis.setex(`client:${clientConnection.clientId}:presence`, 60, 'online');
+              await prisma.client.update({
+                where: { id: clientConnection.clientId },
+                data: { lastSeenAt: new Date() },
+              });
             }
             ws.send(JSON.stringify({ type: 'pong' }));
             break;
@@ -118,11 +116,11 @@ export function setupWebSocketServer(server: Server) {
     });
 
     ws.on('close', async () => {
-      if (deviceConnection) {
-        deviceConnections.delete(deviceConnection.deviceId);
-        await redis.del(`device:${deviceConnection.deviceId}:presence`);
+      if (clientConnection) {
+        clientConnections.delete(clientConnection.clientId);
+        await redis.del(`client:${clientConnection.clientId}:presence`);
 
-        console.log(`🔌 Device disconnected: ${deviceConnection.deviceId}`);
+        console.log(`🔌 Client disconnected: ${clientConnection.clientId}`);
       }
     });
 
@@ -131,32 +129,38 @@ export function setupWebSocketServer(server: Server) {
     });
   });
 
-  console.log('🔌 WebSocket server ready at /devices/connect');
+  console.log('🔌 WebSocket server ready at /api/clients/connect');
   return wss;
 }
 
-export async function sendToolCallToDevice(deviceId: string, toolCall: {
-  runId: string;
-  callId: string;
-  toolName: string;
-  args: Record<string, unknown>;
-}) {
-  const connection = deviceConnections.get(deviceId);
-  
-  if (!connection) {
-    throw new Error(`Device ${deviceId} not connected`);
+export async function dispatchToolCallToClient(
+  clientId: string,
+  toolCall: {
+    runId: string;
+    callId: string;
+    toolName: string;
+    args: Record<string, unknown>;
+  }
+): Promise<void> {
+  const connection = clientConnections.get(clientId);
+
+  if (connection) {
+    connection.ws.send(
+      JSON.stringify({
+        type: 'tool.call.request',
+        data: toolCall,
+      })
+    );
   }
 
-  connection.ws.send(JSON.stringify({
-    type: 'tool.call.request',
-    data: toolCall,
-  }));
-
   await redis.xadd(
-    `device:${deviceId}:inbox`,
+    `client:${clientId}:inbox`,
     '*',
-    'type', 'tool.call.request',
-    'ts', new Date().toISOString(),
-    'payload', JSON.stringify(toolCall)
+    'type',
+    'tool.call.request',
+    'ts',
+    new Date().toISOString(),
+    'payload',
+    JSON.stringify(toolCall)
   );
 }

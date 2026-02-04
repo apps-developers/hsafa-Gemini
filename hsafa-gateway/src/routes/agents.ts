@@ -33,7 +33,7 @@ function stableStringify(value: unknown): string {
 
 agentsRouter.post('/', async (req, res) => {
   try {
-    const { name, config, version, metadata } = req.body;
+    const { name, config } = req.body;
 
     if (!config || typeof config !== 'object') {
       return res.status(400).json({
@@ -54,81 +54,99 @@ agentsRouter.post('/', async (req, res) => {
       });
     }
 
-    const agent =
-      (await prisma.agent.findUnique({
-        where: { name: agentName },
-      })) ??
-      (await prisma.agent.create({
-        data: {
-          name: agentName,
-          description: validatedConfig.agent?.description,
-        },
-      }));
-
     const configHash = createHash('sha256')
       .update(stableStringify(validatedConfig))
       .digest('hex');
 
-    const existingVersion = await prisma.agentVersion.findUnique({
-      where: {
-        agentId_configHash: {
-          agentId: agent.id,
-          configHash,
-        },
-      },
+    const existing = await prisma.agent.findUnique({
+      where: { name: agentName },
+      select: { id: true, configHash: true },
     });
 
-    if (existingVersion) {
+    if (existing && existing.configHash === configHash) {
       return res.json({
-        agentId: agent.id,
-        agentVersionId: existingVersion.id,
+        agentId: existing.id,
         configHash,
         created: false,
       });
     }
 
-    let versionTag =
-      typeof version === 'string' && version.trim().length > 0
-        ? version.trim()
-        : validatedConfig.version;
-
-    if (!versionTag || versionTag.trim().length === 0) {
-      versionTag = 'auto';
-    }
-
-    const existingVersionTag = await prisma.agentVersion.findUnique({
-      where: {
-        agentId_version: {
-          agentId: agent.id,
-          version: versionTag,
-        },
-      },
-    });
-
-    if (existingVersionTag) {
-      versionTag = `${versionTag}-${configHash.slice(0, 8)}`;
-    }
-
-    const newVersion = await prisma.agentVersion.create({
-      data: {
-        agentId: agent.id,
-        version: versionTag,
+    const agent = await prisma.agent.upsert({
+      where: { name: agentName },
+      create: {
+        name: agentName,
+        description: validatedConfig.agent?.description,
         configJson: validatedConfig as unknown as Prisma.InputJsonValue,
         configHash,
-        metadata: metadata ?? null,
+      },
+      update: {
+        description: validatedConfig.agent?.description,
+        configJson: validatedConfig as unknown as Prisma.InputJsonValue,
+        configHash,
       },
     });
 
-    res.json({
-      agentId: agent.id,
-      agentVersionId: newVersion.id,
-      configHash,
-      created: true,
-    });
+    res.json({ agentId: agent.id, configHash, created: true });
   } catch (error) {
     console.error('[Agents API Error]', error);
     res.status(500).json({
       error: 'Failed to create agent',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+agentsRouter.get('/', async (req, res) => {
+  try {
+    const { limit = '50', offset = '0' } = req.query;
+
+    const agents = await prisma.agent.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(parseInt(limit as string) || 50, 200),
+      skip: parseInt(offset as string) || 0,
+    });
+
+    return res.json({ agents });
+  } catch (error) {
+    console.error('[GET /api/agents] Error:', error);
+    return res.status(500).json({
+      error: 'Failed to list agents',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+agentsRouter.get('/:agentId', async (req, res) => {
+  try {
+    const { agentId } = req.params;
+
+    const agent = await prisma.agent.findUnique({
+      where: { id: agentId },
+    });
+
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found' });
+    }
+
+    return res.json({ agent });
+  } catch (error) {
+    console.error('[GET /api/agents/:agentId] Error:', error);
+    return res.status(500).json({
+      error: 'Failed to fetch agent',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+agentsRouter.delete('/:agentId', async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    await prisma.agent.delete({ where: { id: agentId } });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('[DELETE /api/agents/:agentId] Error:', error);
+    return res.status(500).json({
+      error: 'Failed to delete agent',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }

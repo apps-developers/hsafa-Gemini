@@ -1,6 +1,6 @@
 ---
 title: Distributed Agent Platform Architecture
-description: Building an Agent Builder + Distributed Agent Runtime (gateway) that scales into an agentic network (Nexuses + Entities) with persistent memory and distributed tool execution.
+description: Building an Agent Builder + Distributed Agent Runtime (gateway) that scales into an agentic network (SmartSpaces + Entities) with persistent memory and distributed tool execution.
 ---
 
 # 🧠 The Big Idea
@@ -19,30 +19,30 @@ A system where:
 
 This is like giving AI agents a **backend, memory, and a network of devices**.
 
-The update: instead of thinking only in “one agent ↔ one chat”, the platform’s native model becomes **many Entities collaborating inside shared contexts** (Nexuses).
+The update: instead of thinking only in “one agent ↔ one chat”, the platform’s native model becomes **many Entities collaborating inside shared contexts** (SmartSpaces).
 
 ---
 
-# 🕸️ Agentic Network Model (Nexuses + Entities)
+# 🕸️ Agentic Network Model (SmartSpaces + Entities)
 
 ## Core primitives
 
-### Nexus
+### SmartSpace
 
-A **Nexus** is a shared context space (a timeline of events/messages) where participants collaborate.
+A **SmartSpace** is a shared context space (a timeline of events/messages) where participants collaborate.
 
-- A Nexus can contain any number of participants.
-- Nexuses can be public (many participants) or private (small, scoped contexts like “Manager Nexus”).
+- A SmartSpace can contain any number of participants.
+- SmartSpaces can be public (many participants) or private (small, scoped contexts like “Manager SmartSpace”).
 
 ### Entity
 
-An **Entity** is anything that can participate in a Nexus.
+An **Entity** is anything that can participate in a SmartSpace.
 
 - **Human Entity** (a user from your app)
 - **Agent Entity** (an AI agent)
 - **System Entity** (a service/backend/integration/device)
 
-An Agent Entity can belong to multiple Nexuses.
+An Agent Entity can belong to multiple SmartSpaces.
 
 ### Client
 
@@ -55,9 +55,9 @@ One Entity can connect from **multiple Clients** simultaneously. For example, a 
 
 ### Run (Agent execution)
 
-A **Run** is one execution of **one Agent Entity** in response to a trigger that occurred inside a specific Nexus.
+A **Run** is one execution of **one Agent Entity** in response to a trigger that occurred inside a specific SmartSpace.
 
-- A single Nexus event may trigger multiple Runs (one per Agent Entity in that Nexus).
+- A single SmartSpace event may trigger multiple Runs (one per Agent Entity in that SmartSpace).
 - Each Agent decides whether to respond (an Agent may do work and then emit no user-visible message).
 
 ### Step (inside a Run)
@@ -73,10 +73,10 @@ This distinction matters because the gateway streams **partial outputs** (text d
 
 An Agent Entity can be triggered in several ways:
 
-* A Human Entity message inside a Nexus
+* A Human Entity message inside a SmartSpace
 * Its own scheduled Plan (proactive execution)
-* Another Agent Entity inside a Nexus
-* A System Entity event inside a Nexus
+* Another Agent Entity inside a SmartSpace
+* A System Entity event inside a SmartSpace
 
 ## Scheduling and long-term behavior
 
@@ -133,32 +133,32 @@ When a user starts a run:
 
 Your system is the **body + memory + network**.
 
-In the Nexus model, the gateway runtime expands slightly:
+In the SmartSpace model, the gateway runtime expands slightly:
 
-1. A message/event is written to a Nexus timeline.
-2. The gateway triggers Runs for Agent Entities that belong to that Nexus.
-3. Each Run streams events (text/tool-calls/tool-results) and may append new messages/events back into the Nexus.
+1. A message/event is written to a SmartSpace timeline.
+2. The gateway triggers Runs for Agent Entities that belong to that SmartSpace.
+3. Each Run streams events (text/tool-calls/tool-results) and may append new messages/events back into the SmartSpace.
 
 ---
 
 </details>
 
-# 🔁 Example scenario: Leave Request (Cross-Nexus)
+# 🔁 Example scenario: Leave Request (Cross-SmartSpace)
 
-A Human Entity asks an Agent Entity (in the Employee Nexus) to send a leave request to their manager.
+A Human Entity asks an Agent Entity (in the Employee SmartSpace) to send a leave request to their manager.
 
-1. The Human posts a message in the **Employee Nexus**.
-2. All Agent Entities in that Nexus are triggered; only the relevant Agent chooses to respond.
-3. During the same Run, the Agent calls a tool that triggers a **new Run** of itself inside a different Nexus: the **Manager Nexus**.
-4. The Manager Nexus is private and contains only the Manager (Human Entity) and the Agent.
+1. The Human posts a message in the **Employee SmartSpace**.
+2. All Agent Entities in that SmartSpace are triggered; only the relevant Agent chooses to respond.
+3. During the same Run, the Agent calls a tool that triggers a **new Run** of itself inside a different SmartSpace: the **Manager SmartSpace**.
+4. The Manager SmartSpace is private and contains only the Manager (Human Entity) and the Agent.
 5. The Agent asks the Manager for approval.
-6. The Manager replies; that reply becomes a new event in the Manager Nexus, triggering the Agent again there.
-7. The Agent then triggers another Run back in the Employee Nexus to deliver the final decision.
+6. The Manager replies; that reply becomes a new event in the Manager SmartSpace, triggering the Agent again there.
+7. The Agent then triggers another Run back in the Employee SmartSpace to deliver the final decision.
 
 While waiting, if the employee asks for status, the Agent can:
 
-* Read the Manager Nexus timeline.
-* Summarize progress back in the Employee Nexus.
+* Read the Manager SmartSpace timeline.
+* Summarize progress back in the Employee SmartSpace.
 
 ---
 
@@ -170,7 +170,7 @@ When an Agent calls a tool, it can decide **who can see and interact with that t
 
 ### 1. Entity-visible tools
 
-The Agent can mark a tool call as visible to **all Entities** in the Nexus. This allows:
+The Agent can mark a tool call as visible to **all Entities** in the SmartSpace. This allows:
 
 - Entities to see the tool call and its parameters
 - Entities to provide a response (output) to the tool
@@ -202,29 +202,29 @@ These are internal tools that Entities do not see or interact with:
 
    * Store long-term facts, user preferences, learnings
    * Retrieve memories by topic or Entity
-   * Memory persists across Runs and Nexuses
+   * Memory persists across Runs and SmartSpaces
 
-4. **Nexus awareness tools**
+4. **SmartSpace awareness tools**
 
-   * Read the list of Nexuses it belongs to
-   * Read messages/events from a specific Nexus
+   * Read the list of SmartSpaces it belongs to
+   * Read messages/events from a specific SmartSpace
 
 5. **Entity awareness tools**
 
-   * List Entities in a Nexus
+   * List Entities in a SmartSpace
    * Look up Entity info (who is this person, what are their preferences)
 
-6. **Cross-Nexus execution tool**
+6. **Cross-SmartSpace execution tool**
 
-   * Run itself as a new execution inside a specific Nexus
+   * Run itself as a new execution inside a specific SmartSpace
    * Include instructions about what it should do there
    * Include context about where the run originated
-   * This also enables agent-to-agent collaboration: create a private Nexus between two agents, then run there to communicate
+   * This also enables agent-to-agent collaboration: create a private SmartSpace between two agents, then run there to communicate
 
-7. **Nexus management tools**
+7. **SmartSpace management tools**
 
-   * Create Nexuses
-   * Delete Nexuses
+   * Create SmartSpaces
+   * Delete SmartSpaces
 
 8. **Time awareness tools**
 

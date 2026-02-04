@@ -71,8 +71,8 @@ model Entity {
   agent   Agent?  @relation(fields: [agentId], references: [id])
 
   // Relationships
-  nexusMemberships NexusMembership[]
-  messages         NexusMessage[]
+  smartSpaceMemberships SmartSpaceMembership[]
+  messages         SmartSpaceMessage[]
   runs             Run[]              // Runs triggered by this entity
   clients          Client[]
   memories         Memory[]
@@ -85,10 +85,10 @@ model Entity {
 }
 
 // =============================================================================
-// NEXUS - Shared context space (timeline of events/messages)
+// SMART SPACE - Shared context space (timeline of events/messages)
 // =============================================================================
 
-model Nexus {
+model SmartSpace {
   id          String   @id @default(uuid()) @db.Uuid
   name        String?
   description String?
@@ -97,54 +97,54 @@ model Nexus {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  memberships NexusMembership[]
-  messages    NexusMessage[]
+  memberships SmartSpaceMembership[]
+  messages    SmartSpaceMessage[]
   runs        Run[]
 
   @@index([createdAt])
-  @@map("nexuses")
+  @@map("smart_spaces")
 }
 
-model NexusMembership {
-  id        String   @id @default(uuid()) @db.Uuid
-  nexusId   String   @map("nexus_id") @db.Uuid
-  entityId  String   @map("entity_id") @db.Uuid
-  role      String?  // optional: admin, member, observer, etc.
-  joinedAt  DateTime @default(now()) @map("joined_at") @db.Timestamptz(6)
+model SmartSpaceMembership {
+  id           String   @id @default(uuid()) @db.Uuid
+  smartSpaceId String   @map("smart_space_id") @db.Uuid
+  entityId     String   @map("entity_id") @db.Uuid
+  role         String?  // optional: admin, member, observer, etc.
+  joinedAt     DateTime @default(now()) @map("joined_at") @db.Timestamptz(6)
 
-  nexus  Nexus  @relation(fields: [nexusId], references: [id], onDelete: Cascade)
-  entity Entity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+  smartSpace SmartSpace @relation(fields: [smartSpaceId], references: [id], onDelete: Cascade)
+  entity     Entity     @relation(fields: [entityId], references: [id], onDelete: Cascade)
 
-  @@unique([nexusId, entityId])
+  @@unique([smartSpaceId, entityId])
   @@index([entityId])
-  @@map("nexus_memberships")
+  @@map("smart_space_memberships")
 }
 
 // =============================================================================
-// NEXUS TIMELINE - Messages/events in a Nexus
+// SMART SPACE TIMELINE - Messages/events in a SmartSpace
 // =============================================================================
 
-model NexusMessage {
-  id        String   @id @default(uuid()) @db.Uuid
-  nexusId   String   @map("nexus_id") @db.Uuid
-  entityId  String   @map("entity_id") @db.Uuid
-  role      String   // user, assistant, system, tool
-  content   String?  @db.Text
-  metadata  Json?    @db.JsonB
-  seq       BigInt   // ordering within nexus
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+model SmartSpaceMessage {
+  id           String   @id @default(uuid()) @db.Uuid
+  smartSpaceId String   @map("smart_space_id") @db.Uuid
+  entityId     String   @map("entity_id") @db.Uuid
+  role         String   // user, assistant, system, tool
+  content      String?  @db.Text
+  metadata     Json?    @db.JsonB
+  seq          BigInt   // ordering within smart space
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  nexus  Nexus  @relation(fields: [nexusId], references: [id], onDelete: Cascade)
-  entity Entity @relation(fields: [entityId], references: [id])
+  smartSpace SmartSpace @relation(fields: [smartSpaceId], references: [id], onDelete: Cascade)
+  entity     Entity     @relation(fields: [entityId], references: [id])
 
   // If this message was produced by a Run
   runId String? @map("run_id") @db.Uuid
   run   Run?    @relation(fields: [runId], references: [id])
 
-  @@unique([nexusId, seq])
-  @@index([nexusId, createdAt])
+  @@unique([smartSpaceId, seq])
+  @@index([smartSpaceId, createdAt])
   @@index([entityId])
-  @@map("nexus_messages")
+  @@map("smart_space_messages")
 }
 
 // =============================================================================
@@ -168,16 +168,16 @@ model Agent {
 }
 
 // =============================================================================
-// RUN - One execution of an Agent Entity in a Nexus
+// RUN - One execution of an Agent Entity in a SmartSpace
 // =============================================================================
 
 model Run {
   id            String    @id @default(uuid()) @db.Uuid
-  nexusId       String    @map("nexus_id") @db.Uuid
+  smartSpaceId       String    @map("smart_space_id") @db.Uuid
   agentEntityId String    @map("agent_entity_id") @db.Uuid
   agentId       String    @map("agent_id") @db.Uuid
   triggeredById String?   @map("triggered_by_id") @db.Uuid // Entity that triggered this run
-  parentRunId   String?   @map("parent_run_id") @db.Uuid   // For cross-nexus runs
+  parentRunId   String?   @map("parent_run_id") @db.Uuid   // For cross-smart-space runs
   status        RunStatus
   startedAt     DateTime? @map("started_at") @db.Timestamptz(6)
   completedAt   DateTime? @map("completed_at") @db.Timestamptz(6)
@@ -186,7 +186,7 @@ model Run {
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  nexus       Nexus  @relation(fields: [nexusId], references: [id])
+  smartSpace       SmartSpace  @relation(fields: [smartSpaceId], references: [id])
   agentEntity Entity @relation(fields: [agentEntityId], references: [id])
   agent       Agent  @relation(fields: [agentId], references: [id])
   parentRun   Run?   @relation("RunHierarchy", fields: [parentRunId], references: [id])
@@ -195,9 +195,9 @@ model Run {
   events       RunEvent[]
   toolCalls    ToolCall[]
   toolResults  ToolResult[]
-  messages     NexusMessage[]
+  messages     SmartSpaceMessage[]
 
-  @@index([nexusId, createdAt])
+  @@index([smartSpaceId, createdAt])
   @@index([agentEntityId, createdAt])
   @@index([status, updatedAt])
   @@index([parentRunId])
@@ -293,7 +293,7 @@ model Client {
 }
 
 // =============================================================================
-// MEMORY - Long-term agent memory (persists across Runs and Nexuses)
+// MEMORY - Long-term agent memory (persists across Runs and SmartSpaces)
 // =============================================================================
 
 model Memory {
@@ -322,7 +322,7 @@ model Plan {
   name         String?
   schedule     String     // Cron expression or ISO timestamp
   instruction  String?    @db.Text // What to do when triggered
-  targetNexusId String?   @map("target_nexus_id") @db.Uuid
+  targetSmartSpaceId String?   @map("target_smart_space_id") @db.Uuid
   status       PlanStatus @default(active)
   lastRunAt    DateTime?  @map("last_run_at") @db.Timestamptz(6)
   nextRunAt    DateTime?  @map("next_run_at") @db.Timestamptz(6)

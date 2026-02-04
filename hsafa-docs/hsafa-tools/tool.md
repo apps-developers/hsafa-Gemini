@@ -11,7 +11,7 @@ Tools are defined in the agent configuration JSON. Each tool has a name, standar
   "name": "string",
   "description": "string",
   "inputSchema": {},                // Optional for some execution types
-  "executionType": "basic|request|ai-agent|waiting|compute|image-generator",  // Optional, defaults to "basic"
+  "executionType": "basic|request|image-generator",  // Optional, defaults to "basic"
   "execution": {}
 }
 ```
@@ -23,8 +23,8 @@ Tools are defined in the agent configuration JSON. Each tool has a name, standar
 - **`name`** (required) - Unique tool identifier
 - **`description`** (optional) - What the tool does, helps LLM decide when to use it
 - **`inputSchema`** (optional) - JSON schema defining input parameters
-  - Required for: `basic`, `request`, `waiting`, `compute`
-  - Has default for: `ai-agent`, `image-generator` (automatic `prompt` schema, do not add manually)
+  - Required for: `basic`, `request`
+  - Has default for: `image-generator` (automatic `prompt` schema, do not add manually)
 
 ### Hsafa Logic Properties
 
@@ -60,43 +60,7 @@ Make HTTP requests to external APIs.
 }
 ```
 
-### 3. `ai-agent`
-Delegate tasks to other AI agents.
-
-**Execution config:**
-```json
-{
-  "agentConfig": {},        // Complete agent configuration (inline agent definition)
-  "includeContext": false,  // Optional: pass message context to agent (default: false)
-  "timeout": 30000          // Optional
-}
-```
-
-**Note:** Has default `prompt` inputSchema (automatic, do not add manually).
-
-### 4. `waiting`
-Pause execution for a duration.
-
-**Execution config:**
-```json
-{
-  "duration": 1000,
-  "reason": "string"
-}
-```
-
-### 5. `compute`
-Perform safe logic and calculations on data.
-
-**Execution config:**
-```json
-{
-  "operation": "string",
-  "expression": "string"
-}
-```
-
-### 6. `image-generator`
+### 3. `image-generator`
 Generate images from text prompts.
 
 **Execution config:**
@@ -172,64 +136,6 @@ Uses default no-execution mode, gets response from frontend.
 }
 ```
 
-### AI Agent Tool
-```json
-{
-  "name": "analyzeFinancials",
-  "description": "Analyze financial data using specialized agent",
-  "executionType": "ai-agent",
-  "execution": {
-    "agentConfig": {
-      "name": "finance-analyst",
-      "model": "gpt-4",
-      "systemPrompt": "You are a financial analyst specialized in profitability analysis.",
-      "tools": []
-    },
-    "includeContext": false
-  }
-}
-```
-
-**Note:** Default `prompt` inputSchema is automatic - do not add manually.
-
-### Waiting Tool
-```json
-{
-  "name": "waitBeforeRetry",
-  "description": "Wait before retrying an operation",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "seconds": {"type": "number"}
-    }
-  },
-  "executionType": "waiting",
-  "execution": null
-}
-```
-Duration specified in tool input, not execution config.
-
-### Compute Tool
-```json
-{
-  "name": "calculateProfit",
-  "description": "Calculate profit margin",
-  "inputSchema": {
-    "type": "object",
-    "properties": {
-      "revenue": {"type": "number"},
-      "costs": {"type": "number"}
-    },
-    "required": ["revenue", "costs"]
-  },
-  "executionType": "compute",
-  "execution": {
-    "operation": "calculate",
-    "expression": "(revenue - costs) / revenue * 100"
-  }
-}
-```
-
 ### Image Generator Tool
 ```json
 {
@@ -253,6 +159,6 @@ Duration specified in tool input, not execution config.
 - **Standard Vercel AI SDK structure** - Compatible with `description`, `inputSchema`
 - **`execution` property** - Hsafa Logic extension for backend execution configuration
 - **Null execution** - Valid for basic tool (defaults to no-execution mode) and tools where config comes from input
-- **Default inputSchema** - AI Agent and Image Generator tools have automatic `prompt` inputSchema (do not add manually)
+- **Default inputSchema** - Image Generator tools have automatic `prompt` inputSchema (do not add manually)
 - **Variable substitution** - Use `{{variableName}}` in execution config (e.g., URLs, headers)
 - **Type safety** - Use JSON schema for `inputSchema` validation where applicable
