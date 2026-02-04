@@ -50,7 +50,12 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
   const convertedMessages = useMemo<ThreadMessageLike[]>(() => {
     const persisted = rawMessages.map(convertSmartSpaceMessage);
 
-    const streaming = streamingMessages.map((sm): ThreadMessageLike => {
+    // Only show streaming messages that are still actively streaming
+    // Once isStreaming is false, the message is completed and waiting to be
+    // replaced by the persisted version - don't show duplicates
+    const activeStreaming = streamingMessages.filter((sm) => sm.isStreaming);
+
+    const streaming = activeStreaming.map((sm): ThreadMessageLike => {
       const text = smartSpaceStreamPartsToText(sm.parts);
       return {
         id: sm.id,
@@ -60,7 +65,7 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions) {
     });
 
     return [...persisted, ...streaming];
-  }, [rawMessages, streamingMessages, membersById]);
+  }, [rawMessages, streamingMessages]);
 
   const onNew = async (message: AppendMessage) => {
     const firstPart = message.content[0];
