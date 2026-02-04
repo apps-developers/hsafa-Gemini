@@ -1,5 +1,43 @@
 import type { SmartSpaceMessageRecord, SmartSpaceStreamMessage } from './types.js';
 
+export type MessagePart =
+  | { type: 'text'; text: string }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; args: unknown }
+  | { type: 'tool-result'; toolCallId: string; toolName: string; result: unknown };
+
+export function extractMessageParts(m: SmartSpaceMessageRecord): MessagePart[] {
+  if (m.content != null && String(m.content).length > 0) {
+    return [{ type: 'text', text: String(m.content) }];
+  }
+
+  const uiMessage = (m.metadata as any)?.uiMessage;
+  const parts = uiMessage?.parts;
+  if (!Array.isArray(parts)) return [];
+
+  const result: MessagePart[] = [];
+  for (const p of parts) {
+    if (!p || typeof p !== 'object') continue;
+    if (p.type === 'text') {
+      result.push({ type: 'text', text: String(p.text ?? '') });
+    } else if (p.type === 'tool-call') {
+      result.push({
+        type: 'tool-call',
+        toolCallId: String(p.toolCallId ?? ''),
+        toolName: String(p.toolName ?? ''),
+        args: p.input ?? p.args ?? {},
+      });
+    } else if (p.type === 'tool-result') {
+      result.push({
+        type: 'tool-result',
+        toolCallId: String(p.toolCallId ?? ''),
+        toolName: String(p.toolName ?? ''),
+        result: p.output ?? p.result ?? {},
+      });
+    }
+  }
+  return result;
+}
+
 export function smartSpaceMessageToText(m: SmartSpaceMessageRecord): string {
   if (m.content != null && String(m.content).length > 0) return String(m.content);
 

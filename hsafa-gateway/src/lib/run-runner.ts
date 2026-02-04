@@ -27,6 +27,79 @@ function toUiMessageFromSmartSpaceMessage(m: {
   };
 }
 
+function toAiSdkUiMessages(rawUiMessages: Array<{ id?: string; role?: string; parts?: unknown }>) {
+  const toolResultsById = new Map<string, unknown>();
+  for (const m of rawUiMessages) {
+    if (m?.role !== 'tool') continue;
+    const parts = Array.isArray(m.parts) ? (m.parts as any[]) : [];
+    for (const p of parts) {
+      if (!p || typeof p !== 'object') continue;
+      if (p.type === 'tool-result' && typeof p.toolCallId === 'string') {
+        toolResultsById.set(p.toolCallId, (p as any).output);
+      }
+    }
+  }
+
+  const out: Array<{ role: 'system' | 'user' | 'assistant'; parts: any[] }> = [];
+
+  for (const m of rawUiMessages) {
+    const role = m?.role;
+    if (role !== 'system' && role !== 'user' && role !== 'assistant') continue;
+
+    const partsIn = Array.isArray(m.parts) ? (m.parts as any[]) : [];
+    const partsOut: any[] = [];
+
+    for (const p of partsIn) {
+      if (!p || typeof p !== 'object') continue;
+
+      if (p.type === 'text' && typeof p.text === 'string') {
+        partsOut.push({ type: 'text', text: p.text });
+        continue;
+      }
+
+      if (p.type === 'reasoning' && typeof p.text === 'string') {
+        partsOut.push({ type: 'reasoning', text: p.text });
+        continue;
+      }
+
+      // Stored in DB for UI, but needs to be mapped to AI SDK's tool invocation part.
+      if (p.type === 'tool-call' && typeof p.toolCallId === 'string' && typeof p.toolName === 'string') {
+        const input = 'input' in p ? (p as any).input : 'args' in p ? (p as any).args : {};
+        const output = toolResultsById.get(p.toolCallId);
+
+        if (output !== undefined) {
+          partsOut.push({
+            type: 'dynamic-tool',
+            toolName: p.toolName,
+            toolCallId: p.toolCallId,
+            state: 'output-available',
+            input,
+            output,
+          });
+        } else {
+          partsOut.push({
+            type: 'dynamic-tool',
+            toolName: p.toolName,
+            toolCallId: p.toolCallId,
+            state: 'input-available',
+            input,
+          });
+        }
+
+        continue;
+      }
+    }
+
+    if (partsOut.length === 0) {
+      partsOut.push({ type: 'text', text: '' });
+    }
+
+    out.push({ role, parts: partsOut });
+  }
+
+  return out;
+}
+
 export async function executeRun(runId: string): Promise<void> {
   const run = await prisma.run.findUnique({
     where: { id: runId },
@@ -99,7 +172,8 @@ export async function executeRun(runId: string): Promise<void> {
     });
 
     const uiMessages = messages.map(toUiMessageFromSmartSpaceMessage);
-    const modelMessages = await convertToModelMessages(uiMessages as any);
+    const aiSdkUiMessages = toAiSdkUiMessages(uiMessages as any);
+    const modelMessages = await convertToModelMessages(aiSdkUiMessages as any);
 
     const streamResult = await built.agent.stream({ messages: modelMessages });
 
@@ -195,23 +269,24 @@ export async function executeRun(runId: string): Promise<void> {
             },
           });
 
+          // Always persist tool call message so it's visible in UI
+          await createSmartSpaceMessage({
+            smartSpaceId: run.smartSpaceId,
+            entityId: run.agentEntityId,
+            role: 'assistant',
+            content: null,
+            metadata: { uiMessage: assistantToolCallMessage } as unknown as Prisma.InputJsonValue,
+            runId,
+          });
+
+          await emitSmartSpaceEvent(
+            run.smartSpaceId,
+            'smartSpace.message',
+            { message: assistantToolCallMessage },
+            { runId, agentEntityId: run.agentEntityId }
+          );
+
           if (executionTarget !== 'server') {
-            await createSmartSpaceMessage({
-              smartSpaceId: run.smartSpaceId,
-              entityId: run.agentEntityId,
-              role: 'assistant',
-              content: null,
-              metadata: { uiMessage: assistantToolCallMessage } as unknown as Prisma.InputJsonValue,
-              runId,
-            });
-
-            await emitSmartSpaceEvent(
-              run.smartSpaceId,
-              'smartSpace.message',
-              { message: assistantToolCallMessage },
-              { runId, agentEntityId: run.agentEntityId }
-            );
-
             await prisma.run.update({
               where: { id: runId },
               data: { status: 'waiting_tool' },
@@ -255,21 +330,38 @@ export async function executeRun(runId: string): Promise<void> {
             result: output,
           });
 
-          await emitEvent('message.tool', {
-            message: {
-              id: `msg-${Date.now()}-tool-${part.toolCallId}`,
-              role: 'tool',
-              parts: [
-                {
-                  type: 'tool-result',
-                  toolCallId: part.toolCallId,
-                  toolName: part.toolName,
-                  output,
-                  state: 'output-available',
-                },
-              ],
-            },
+          const toolResultMessage = {
+            id: `msg-${Date.now()}-tool-${part.toolCallId}`,
+            role: 'tool',
+            parts: [
+              {
+                type: 'tool-result',
+                toolCallId: part.toolCallId,
+                toolName: part.toolName,
+                output,
+                state: 'output-available',
+              },
+            ],
+          };
+
+          await emitEvent('message.tool', { message: toolResultMessage });
+
+          // Persist tool result message so conversation history is complete
+          await createSmartSpaceMessage({
+            smartSpaceId: run.smartSpaceId,
+            entityId: run.agentEntityId,
+            role: 'tool',
+            content: null,
+            metadata: { uiMessage: toolResultMessage } as unknown as Prisma.InputJsonValue,
+            runId,
           });
+
+          await emitSmartSpaceEvent(
+            run.smartSpaceId,
+            'smartSpace.message',
+            { message: toolResultMessage },
+            { runId, agentEntityId: run.agentEntityId }
+          );
 
           await prisma.toolCall.update({
             where: { runId_callId: { runId, callId: part.toolCallId } },

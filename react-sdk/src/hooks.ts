@@ -102,6 +102,15 @@ interface StreamingMessage {
   isStreaming: boolean;
 }
 
+interface StreamingToolCall {
+  id: string;
+  runId: string;
+  toolCallId: string;
+  toolName: string;
+  argsText: string;
+  isStreaming: boolean;
+}
+
 function parseHsafaEvent(raw: string): HsafaSseEvent {
   const evt = JSON.parse(raw) as HsafaSseEvent;
   if (!evt || typeof evt !== 'object') throw new Error('Invalid SSE event');
@@ -114,6 +123,7 @@ export function useSmartSpaceMessages(
 ): {
   messages: SmartSpaceMessageRecord[];
   streamingMessages: StreamingMessage[];
+  streamingToolCalls: StreamingToolCall[];
   isLoading: boolean;
   isConnected: boolean;
   error: unknown;
@@ -126,6 +136,7 @@ export function useSmartSpaceMessages(
 
   const [messages, setMessages] = useState<SmartSpaceMessageRecord[]>([]);
   const [streamingMessages, setStreamingMessages] = useState<StreamingMessage[]>([]);
+  const [streamingToolCalls, setStreamingToolCalls] = useState<StreamingToolCall[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -155,6 +166,7 @@ export function useSmartSpaceMessages(
   useEffect(() => {
     setMessages([]);
     setStreamingMessages([]);
+    setStreamingToolCalls([]);
     setLastSeq(null);
     setError(null);
     setIsConnected(false);
@@ -264,6 +276,39 @@ export function useSmartSpaceMessages(
           });
         };
 
+        const upsertStreamingToolCall = (input: {
+          runId: string;
+          toolCallId: string;
+          toolName?: string;
+          appendDelta?: string;
+          isStreaming?: boolean;
+        }) => {
+          setStreamingToolCalls((prev) => {
+            const idx = prev.findIndex((t) => t.toolCallId === input.toolCallId);
+            const base: StreamingToolCall =
+              idx === -1
+                ? {
+                    id: `toolcall-${input.toolCallId}`,
+                    runId: input.runId,
+                    toolCallId: input.toolCallId,
+                    toolName: input.toolName ?? 'tool',
+                    argsText: '',
+                    isStreaming: true,
+                  }
+                : prev[idx];
+
+            const next: StreamingToolCall = {
+              ...base,
+              toolName: input.toolName ?? base.toolName,
+              argsText: input.appendDelta ? base.argsText + input.appendDelta : base.argsText,
+              isStreaming: input.isStreaming ?? base.isStreaming,
+            };
+
+            if (idx === -1) return [...prev, next];
+            return [...prev.slice(0, idx), next, ...prev.slice(idx + 1)];
+          });
+        };
+
         if (parsed.type === 'smartSpace.message') {
           // A complete message was posted - fetch any new messages after the last *message* seq.
           // Note: Redis stream seq is not the same as SmartSpaceMessage.seq.
@@ -297,6 +342,22 @@ export function useSmartSpaceMessages(
               if (persistedRunIds.size > 0) {
                 setStreamingMessages((prev) => prev.filter((sm) => !persistedRunIds.has(sm.runId)));
               }
+
+              // Remove streaming tool calls if their toolCallId is now persisted in the DB
+              const persistedToolCallIds = new Set<string>();
+              for (const m of newMsgs) {
+                const uiMessage = (m.metadata as any)?.uiMessage;
+                const parts = uiMessage?.parts;
+                if (!Array.isArray(parts)) continue;
+                for (const p of parts) {
+                  if (p && typeof p === 'object' && p.type === 'tool-call' && typeof p.toolCallId === 'string') {
+                    persistedToolCallIds.add(p.toolCallId);
+                  }
+                }
+              }
+              if (persistedToolCallIds.size > 0) {
+                setStreamingToolCalls((prev) => prev.filter((t) => !persistedToolCallIds.has(t.toolCallId)));
+              }
             })
             .catch(() => {});
         } else if (parsed.type === 'run.created') {
@@ -311,6 +372,26 @@ export function useSmartSpaceMessages(
           if (!delta) return;
 
           upsertStreamingMessage({ runId, agentEntityId, appendTextDelta: delta, isStreaming: true });
+        } else if (parsed.type === 'tool.input.start') {
+          if (!runId) return;
+          const data = payload.data as { toolCallId?: unknown; toolName?: unknown };
+          const toolCallId = typeof data?.toolCallId === 'string' ? data.toolCallId : null;
+          const toolName = typeof data?.toolName === 'string' ? data.toolName : null;
+          if (!toolCallId || !toolName) return;
+          upsertStreamingToolCall({ runId, toolCallId, toolName, isStreaming: true });
+        } else if (parsed.type === 'tool.input.delta') {
+          if (!runId) return;
+          const data = payload.data as { toolCallId?: unknown; delta?: unknown };
+          const toolCallId = typeof data?.toolCallId === 'string' ? data.toolCallId : null;
+          const delta = typeof data?.delta === 'string' ? data.delta : null;
+          if (!toolCallId || !delta) return;
+          upsertStreamingToolCall({
+            runId,
+            toolCallId,
+            toolName: undefined,
+            appendDelta: delta,
+            isStreaming: true,
+          });
         } else if (parsed.type === 'run.completed' || parsed.type === 'run.failed') {
           // Run finished - mark streaming complete, will be replaced by persisted message
           if (!runId) return;
@@ -353,5 +434,5 @@ export function useSmartSpaceMessages(
     [client, smartSpaceId]
   );
 
-  return { messages, streamingMessages, isLoading, isConnected, error, sendMessage, refresh, lastSeq };
+  return { messages, streamingMessages, streamingToolCalls, isLoading, isConnected, error, sendMessage, refresh, lastSeq };
 }

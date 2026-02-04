@@ -15,7 +15,9 @@ async function main() {
     agent: {
       name: 'demo-agent',
       description: 'A simple demo agent for testing',
-      system: 'You are a helpful assistant. Keep responses concise.',
+      system: `You are a helpful assistant. Keep responses concise.
+
+You have access to a displayNotification tool. Use it when the user asks you to show a notification, alert, or message to them. Always use it when asked to demonstrate tools.`,
     },
     model: {
       provider: 'openai',
@@ -27,7 +29,25 @@ async function main() {
       maxSteps: 5,
       toolChoice: 'auto',
     },
-    tools: [],
+    tools: [
+      {
+        name: 'displayNotification',
+        description: 'Display a notification message to the user. Use this when asked to show notifications or alerts.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'The notification title' },
+            message: { type: 'string', description: 'The notification message content' },
+            type: { type: 'string', enum: ['info', 'success', 'warning', 'error'], description: 'The type of notification' },
+          },
+          required: ['title', 'message'],
+        },
+        executionType: 'basic',
+        execution: {
+          mode: 'pass-through',
+        },
+      },
+    ],
   };
 
   const agent = await prisma.agent.upsert({
@@ -37,25 +57,7 @@ async function main() {
       id: DEMO_AGENT_ID,
       name: 'demo-agent',
       description: 'A simple demo agent for testing',
-      configJson: {
-        version: '1.0',
-        agent: {
-          name: 'demo-agent',
-          description: 'A simple demo agent for testing',
-          system: 'You are a helpful assistant. Keep responses concise.',
-        },
-        model: {
-          provider: 'openai',
-          name: 'gpt-4o-mini',
-          temperature: 0.7,
-          maxOutputTokens: 1000,
-        },
-        loop: {
-          maxSteps: 5,
-          toolChoice: 'auto',
-        },
-        tools: [],
-      },
+      configJson: agentConfigJson,
     },
   });
   console.log('✅ Agent created:', agent.name);

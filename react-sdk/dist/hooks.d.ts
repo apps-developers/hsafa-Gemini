@@ -30,12 +30,21 @@ interface StreamingMessage {
     parts: SmartSpaceStreamMessage['parts'];
     isStreaming: boolean;
 }
+interface StreamingToolCall {
+    id: string;
+    runId: string;
+    toolCallId: string;
+    toolName: string;
+    argsText: string;
+    isStreaming: boolean;
+}
 export declare function useSmartSpaceMessages(client: HsafaClient, input: {
     smartSpaceId: string | null;
     limit?: number;
 }): {
     messages: SmartSpaceMessageRecord[];
     streamingMessages: StreamingMessage[];
+    streamingToolCalls: StreamingToolCall[];
     isLoading: boolean;
     isConnected: boolean;
     error: unknown;
