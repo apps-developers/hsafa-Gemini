@@ -184,6 +184,270 @@ The Agent can mark a tool call as visible to **all Entities** in the SmartSpace.
 
 ---
 
+# 🎨 Tool Display Configuration (TODO)
+
+> **Note:** This section describes planned functionality that has not been implemented yet.
+
+## Display Modes
+
+Each tool can be configured with a `display` property that controls how it appears in the chat UI:
+
+```json
+{
+  "name": "searchDatabase",
+  "display": {
+    "mode": "full" | "minimal" | "hidden",
+    "showInput": true,
+    "showOutput": true
+  }
+}
+```
+
+### Display Mode Options
+
+| Mode | Description |
+| ---- | ----------- |
+| `full` | Show tool call with input and output (based on `showInput`/`showOutput` flags) |
+| `minimal` | Only show that the tool was called (name + status indicator, no input/output) |
+| `hidden` | Tool call is not shown in the chat UI at all |
+
+### Configuration Examples
+
+```json
+// Full display - show everything
+{
+  "name": "webSearch",
+  "display": { "mode": "full", "showInput": true, "showOutput": true }
+}
+
+// Show input only (e.g., search query shown, results hidden)
+{
+  "name": "internalLookup",
+  "display": { "mode": "full", "showInput": true, "showOutput": false }
+}
+
+// Minimal - only show that tool was called
+{
+  "name": "updateMemory",
+  "display": { "mode": "minimal" }
+}
+
+// Hidden - internal tool, never shown
+{
+  "name": "planManagement",
+  "display": { "mode": "hidden" }
+}
+```
+
+### Default Behavior
+
+- **Entity-visible tools**: Default to `{ mode: "full", showInput: true, showOutput: true }`
+- **Main Tools (internal)**: Default to `{ mode: "hidden" }`
+
+---
+
+# 🧩 Custom Tool UI Components (TODO)
+
+> **Note:** This section describes planned functionality that has not been implemented yet.
+
+Tools can have custom UI components that replace the default tool display. This enables rich, interactive experiences.
+
+## Architecture
+
+The Hsafa stack uses:
+- **`@hsafa/react-sdk`** — Hooks-only SDK for data fetching (`useSmartSpaceMessages`, `useHsafaClient`, etc.)
+- **`@assistant-ui/react`** — UI primitives (`MessagePrimitive`, `ThreadPrimitive`, etc.)
+
+Custom tool UIs are registered via `MessagePrimitive.Content` components.
+
+## Registering Custom Tool UIs
+
+### Option 1: Tools() API with Toolkit (Recommended)
+
+The recommended approach is to define tools with their `render` function in a toolkit:
+
+```tsx
+import { useAui, Tools, type Toolkit } from "@assistant-ui/react";
+
+const toolkit: Toolkit = {
+  webSearch: {
+    description: "Search the web",
+    parameters: z.object({ query: z.string() }),
+    // No execute - tool runs on gateway
+    render: ({ args, result, status }) => (
+      <SearchResultsCard
+        query={args.query}
+        results={result?.results}
+        loading={status.type === "running"}
+      />
+    ),
+  },
+  
+  requestApproval: {
+    description: "Request user approval",
+    parameters: z.object({ title: z.string(), amount: z.number() }),
+    // No execute - basic tool, response via addResult
+    render: ({ args, result, status, addResult }) => {
+      if (result) return <div>{result.approved ? "✅ Approved" : "❌ Rejected"}</div>;
+      return (
+        <div className="rounded border p-4">
+          <p>{args.title}: ${args.amount}</p>
+          <button onClick={() => addResult({ approved: true })}>Approve</button>
+          <button onClick={() => addResult({ approved: false })}>Reject</button>
+        </div>
+      );
+    },
+  },
+};
+
+// Register in runtime provider
+function MyRuntimeProvider({ children }) {
+  const runtime = useHsafaRuntime({ /* ... */ });
+
+  const aui = useAui({
+    tools: Tools({ toolkit }),
+  });
+
+  return (
+    <AssistantRuntimeProvider aui={aui} runtime={runtime}>
+      {children}
+    </AssistantRuntimeProvider>
+  );
+}
+```
+
+### Option 2: Per-Tool Components via MessagePrimitive.Content
+
+For simpler setups or when using `useExternalStoreRuntime`, pass tool components directly:
+
+```tsx
+import { MessagePrimitive } from "@assistant-ui/react";
+
+// Custom UI components for specific tools
+const toolComponents = {
+  webSearch: WebSearchToolUI,
+  requestApproval: ApprovalToolUI,
+};
+
+function AssistantMessage() {
+  return (
+    <MessagePrimitive.Root>
+      <MessagePrimitive.Content
+        components={{
+          tools: {
+            ...toolComponents,
+            Fallback: DefaultToolUI, // fallback for unregistered tools
+          },
+        }}
+      />
+    </MessagePrimitive.Root>
+  );
+}
+```
+
+This is what the `nextjs-test-app` currently uses with `useExternalStoreRuntime`.
+
+## Tool UI Component Props
+
+All tool UI components receive:
+
+```tsx
+interface ToolUIProps {
+  toolName: string;
+  toolCallId: string;
+  args: Record<string, unknown>;
+  argsText: string;                    // JSON stringified args
+  result?: unknown;
+  status: {
+    type: "running" | "complete" | "incomplete" | "requires-action";
+    reason?: string;                   // e.g., "error", "cancelled"
+  };
+  
+  // For interactive tools - submit a result back to the gateway
+  addResult?: (result: unknown) => void;
+}
+```
+
+## Custom UI for Basic Tools
+
+For **basic tools** (see [basic-tool.md](/hsafa-tools/basic-tool.md)), custom UIs can return a tool response via `addResult()`:
+
+```tsx
+function ApprovalToolUI({ args, result, status, addResult }: ToolUIProps) {
+  // Already completed
+  if (result) {
+    return <div>{result.approved ? "✅ Approved" : "❌ Rejected"}</div>;
+  }
+
+  // Waiting for user input
+  return (
+    <div className="rounded border p-4">
+      <p>{args.title}</p>
+      <div className="flex gap-2 mt-3">
+        <button onClick={() => addResult({ approved: true })}>Approve</button>
+        <button onClick={() => addResult({ approved: false })}>Reject</button>
+      </div>
+    </div>
+  );
+}
+```
+
+## Custom UI for Gateway-Executed Tools
+
+Tools that execute on the gateway can still have custom visualization:
+
+```tsx
+function DatabaseQueryToolUI({ args, result, status }: ToolUIProps) {
+  if (status.type === "running") {
+    return <QueryLoadingState query={args.sql} />;
+  }
+  
+  if (status.type === "incomplete" && status.reason === "error") {
+    return <ErrorDisplay message="Query failed" />;
+  }
+
+  return <DataTable rows={result.rows} columns={result.columns} />;
+}
+```
+
+## Display Mode + Custom UI Integration
+
+The `display` configuration works with custom UIs:
+
+```json
+{
+  "name": "webSearch",
+  "display": { "mode": "full", "showInput": true, "showOutput": true }
+}
+```
+
+- If `display.mode` is `"hidden"`, the tool UI is not rendered at all
+- If `display.mode` is `"minimal"`, the custom UI receives a hint to render minimally
+- If `display.mode` is `"full"`, the custom UI renders fully
+
+The custom UI can check `display` config via props and adjust rendering accordingly.
+
+## Fallback Behavior
+
+If no custom UI is registered for a tool:
+1. Check the tool's `display` configuration
+2. Render using the default `ToolFallback` component (collapsible with args/result)
+
+```tsx
+// Default fallback shows tool name, status, and expandable args/result
+function DefaultToolUI({ toolName, args, status }: ToolUIProps) {
+  const isRunning = status.type === "running";
+  return (
+    <div className="flex items-center gap-2 rounded border px-2 py-1 text-xs">
+      {isRunning ? <LoaderIcon className="animate-spin" /> : <CheckIcon />}
+      <span>{isRunning ? "Running" : "Completed"} {toolName}</span>
+    </div>
+  );
+}
+```
+
+---
+
 # 🧰 Main Tools every Agent Entity should have
 
 These are internal tools that Entities do not see or interact with:

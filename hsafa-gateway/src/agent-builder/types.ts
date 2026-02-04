@@ -170,13 +170,12 @@ export const ImageGeneratorExecutionSchema = z.object({
   includeContext: z.boolean().optional().default(false),
 });
 
-export const ToolExecutionTargetSchema = z.preprocess(
-  (value) => {
-    if (value === 'device' || value === 'browser') return 'client';
-    return value;
-  },
-  z.enum(['server', 'client', 'external']).optional()
-);
+export const ToolDisplaySchema = z.object({
+  mode: z.enum(['full', 'minimal', 'hidden']).optional(),
+  showInput: z.boolean().optional(),
+  showOutput: z.boolean().optional(),
+  customUI: z.string().optional(),
+});
 
 export const ToolSchema = z.preprocess(
   (value) => {
@@ -231,7 +230,7 @@ export const ToolSchema = z.preprocess(
     }),
   ]).and(
     z.object({
-      executionTarget: ToolExecutionTargetSchema,
+      display: ToolDisplaySchema.optional(),
     })
   )
 );
