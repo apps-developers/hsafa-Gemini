@@ -4,6 +4,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useMessage,
 } from "@assistant-ui/react";
 import {
   ArrowUpIcon,
@@ -18,29 +19,34 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useMembers } from "@/hooks/useMembersContext";
 
 export function Thread() {
   return (
     <ThreadPrimitive.Root className="flex h-full flex-col bg-background">
-      <ThreadPrimitive.Viewport className="scrollbar-none flex flex-1 flex-col overflow-y-auto px-4 pt-6">
-        <ThreadPrimitive.Empty>
-          <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
-            <p className="text-muted-foreground text-sm">
-              How can I help you today?
-            </p>
-          </div>
-        </ThreadPrimitive.Empty>
+      <ThreadPrimitive.Viewport className="scrollbar-none flex flex-1 flex-col overflow-y-auto">
+        <div className="mx-auto w-full max-w-3xl px-4 pt-6">
+          <ThreadPrimitive.Empty>
+            <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
+              <p className="text-muted-foreground text-sm">
+                How can I help you today?
+              </p>
+            </div>
+          </ThreadPrimitive.Empty>
 
-        <ThreadPrimitive.Messages
-          components={{
-            UserMessage,
-            AssistantMessage,
-          }}
-        />
+          <ThreadPrimitive.Messages
+            components={{
+              UserMessage,
+              AssistantMessage,
+            }}
+          />
+        </div>
       </ThreadPrimitive.Viewport>
 
-      <div className="sticky bottom-0 bg-background px-4">
-        <Composer />
+      <div className="sticky bottom-0 bg-background">
+        <div className="mx-auto w-full max-w-3xl px-4">
+          <Composer />
+        </div>
       </div>
     </ThreadPrimitive.Root>
   );
@@ -103,9 +109,25 @@ function UserMessage() {
 }
 
 function AssistantMessage() {
+  const { membersById, currentEntityId } = useMembers();
+  const message = useMessage();
+  
+  const entityId = (message.metadata?.custom as { entityId?: string })?.entityId;
+  const isFromMe = entityId === currentEntityId;
+  const sender = entityId ? membersById[entityId] : null;
+  const senderName = sender?.displayName || (sender?.type === "agent" ? "Agent" : "Unknown");
+
   return (
     <MessagePrimitive.Root className="py-2" data-role="assistant">
-      <div className="text-sm">
+      {!isFromMe && senderName && (
+        <div className="mb-1 text-xs font-medium text-muted-foreground">
+          {senderName}
+        </div>
+      )}
+      <div className={cn(
+        "text-sm rounded-lg px-3 py-2",
+        !isFromMe && "border border-border"
+      )}>
         <MessagePrimitive.Content
           components={{
             Text: ({ text }: { text: string }) => (

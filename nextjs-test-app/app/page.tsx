@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/sheet";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useHsafaRuntime } from "@/hooks/useHsafaRuntime";
+import { MembersProvider } from "@/hooks/useMembersContext";
 import { cn } from "@/lib/utils";
 
 const GATEWAY_URL = "http://localhost:3001";
@@ -127,7 +128,7 @@ export default function Home() {
   });
   const effectiveSmartSpaceId = selectedSpaceId ?? smartSpaces[0]?.id ?? null;
 
-  const { runtime } = useHsafaRuntime({
+  const { runtime, membersById } = useHsafaRuntime({
     client,
     entityId: DEMO_USER_ENTITY_ID,
     smartSpaceId: effectiveSmartSpaceId,
@@ -161,7 +162,12 @@ export default function Home() {
             onMobileMenuOpen={() => setMobileMenuOpen(true)}
           />
           <main className="flex-1 overflow-hidden">
-            <Thread />
+            <MembersProvider
+              membersById={membersById}
+              currentEntityId={DEMO_USER_ENTITY_ID}
+            >
+              <Thread />
+            </MembersProvider>
           </main>
         </div>
       </div>

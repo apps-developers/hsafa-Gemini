@@ -33,6 +33,7 @@ function convertSmartSpaceMessage(msg: SmartSpaceMessageRecord): ThreadMessageLi
     role: msg.role === "user" ? "user" : "assistant",
     content: [{ type: "text", text }],
     createdAt: new Date(msg.createdAt),
+    metadata: { custom: { entityId: msg.entityId } },
   };
 }
 
