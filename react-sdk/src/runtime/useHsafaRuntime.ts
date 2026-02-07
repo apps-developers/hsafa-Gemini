@@ -174,13 +174,35 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
     streamRef.current = stream;
 
     stream.on('smartSpace.message', (event: StreamEvent) => {
-      const msg = event.data?.message as SmartSpaceMessage | undefined;
-      if (msg) {
-        setRawMessages((prev) => {
-          if (prev.some((m) => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
+      const raw = event.data?.message as Record<string, unknown> | undefined;
+      if (!raw || !raw.id) return;
+
+      // The gateway emits UI-formatted messages with `parts` array,
+      // but SmartSpaceMessage uses `content`. Normalise here.
+      let content = raw.content as string | undefined;
+      if (!content && Array.isArray(raw.parts)) {
+        content = (raw.parts as Array<{ type: string; text?: string }>)
+          .filter((p) => p.type === 'text' && p.text)
+          .map((p) => p.text)
+          .join('\n');
       }
+
+      const msg: SmartSpaceMessage = {
+        id: raw.id as string,
+        smartSpaceId: event.smartSpaceId || (raw.smartSpaceId as string) || '',
+        entityId: (raw.entityId as string) || event.entityId || null,
+        seq: (raw.seq as string) || String(event.seq || '0'),
+        role: (raw.role as string) || 'user',
+        content: content || null,
+        createdAt: (raw.createdAt as string) || new Date().toISOString(),
+      };
+
+      if (!msg.content?.trim()) return;
+
+      setRawMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev, msg];
+      });
     });
 
     stream.on('run.created', (event: StreamEvent) => {
@@ -200,7 +222,7 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
       });
     });
 
-    stream.on('text.delta', (event: StreamEvent) => {
+    stream.on('text-delta', (event: StreamEvent) => {
       const runId = event.runId || (event.data.runId as string);
       const delta = (event.data.delta as string) || (event.data.text as string) || '';
       if (!runId || !delta) return;
