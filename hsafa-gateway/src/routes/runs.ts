@@ -6,11 +6,12 @@ import { createEmitEvent, toSSEEvent } from '../lib/run-events.js';
 import { executeRun } from '../lib/run-runner.js';
 import { submitToolResult } from '../lib/tool-results.js';
 import { emitSmartSpaceEvent } from '../lib/smartspace-events.js';
+import { requireAuth, requireSpaceAdmin } from '../middleware/auth.js';
 
 export const runsRouter: ExpressRouter = Router();
 
 // GET /api/runs - List runs (debugging/history)
-runsRouter.get('/', async (req: Request, res: Response) => {
+runsRouter.get('/', requireSpaceAdmin(), async (req: Request, res: Response) => {
   try {
     const { agentId, agentEntityId, smartSpaceId, status, limit = '50', offset = '0' } = req.query;
 
@@ -47,7 +48,7 @@ runsRouter.get('/', async (req: Request, res: Response) => {
 });
 
 // POST /api/runs - Create a new run (debugging)
-runsRouter.post('/', async (req: Request, res: Response) => {
+runsRouter.post('/', requireSpaceAdmin(), async (req: Request, res: Response) => {
   try {
     const { smartSpaceId, agentEntityId, agentId, triggeredById, parentRunId, metadata, start = true } = req.body;
 
@@ -109,7 +110,7 @@ runsRouter.post('/', async (req: Request, res: Response) => {
   }
 });
 
-runsRouter.post('/:runId/cancel', async (req: Request, res: Response) => {
+runsRouter.post('/:runId/cancel', requireSpaceAdmin(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
     const run = await prisma.run.findUnique({ where: { id: runId } });
@@ -137,7 +138,7 @@ runsRouter.post('/:runId/cancel', async (req: Request, res: Response) => {
   }
 });
 
-runsRouter.get('/:runId/stream', async (req: Request, res: Response) => {
+runsRouter.get('/:runId/stream', requireAuth(), async (req: Request, res: Response) => {
   const { runId } = req.params;
   const since = req.query.since as string | undefined;
   const lastEventId = req.headers['last-event-id'] as string | undefined;
@@ -246,7 +247,7 @@ runsRouter.get('/:runId/stream', async (req: Request, res: Response) => {
   }
 });
 
-runsRouter.get('/:runId/events', async (req: Request, res: Response) => {
+runsRouter.get('/:runId/events', requireAuth(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
 
@@ -271,7 +272,7 @@ runsRouter.get('/:runId/events', async (req: Request, res: Response) => {
   }
 });
 
-runsRouter.get('/:runId', async (req: Request, res: Response) => {
+runsRouter.get('/:runId', requireAuth(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
 
@@ -299,7 +300,7 @@ runsRouter.get('/:runId', async (req: Request, res: Response) => {
 });
 
 // DELETE /api/runs/:runId - Delete a run and its events
-runsRouter.delete('/:runId', async (req: Request, res: Response) => {
+runsRouter.delete('/:runId', requireSpaceAdmin(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
 
@@ -329,7 +330,7 @@ runsRouter.delete('/:runId', async (req: Request, res: Response) => {
   }
 });
 
-runsRouter.post('/:runId/tool-results', async (req: Request, res: Response) => {
+runsRouter.post('/:runId/tool-results', requireAuth(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
     const { callId, result, source, clientId } = req.body;

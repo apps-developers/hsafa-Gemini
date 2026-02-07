@@ -168,7 +168,7 @@ While waiting, if the employee asks for status, the Agent can:
 
 When an Agent calls a tool, it can decide **who can see and interact with that tool call**:
 
-### 1. Entity-visible tools
+### 1. Additional tools
 
 The Agent can mark a tool call as visible to **all Entities** in the SmartSpace. This allows:
 
@@ -178,19 +178,30 @@ The Agent can mark a tool call as visible to **all Entities** in the SmartSpace.
 
 **Use case**: A form tool that a specific user needs to fill out, or a confirmation tool that requires approval.
 
-### 2. Main Tools (internal)
+### 2. Prebuilt tools (internal)
 
-**Main Tools** are internal tools that **no Entity should see or interact with**. These are the Agent's private capabilities for managing its own state and reasoning.
+**Prebuilt tools** are internal tools that **no Entity should see or interact with**. These are the Agent's private capabilities for managing its own state and reasoning.
 
 ---
 
-# 🎨 Tool Display Configuration (TODO)
+# 🎨 Tool Display Configuration (Client-Side)
 
-> **Note:** This section describes planned functionality that has not been implemented yet.
+> **Note:** Tool display configuration is handled entirely by the **client SDK**, not the gateway or database. The gateway streams all tool events; the client decides what to show.
+
+## Architecture
+
+**Gateway streams all tool events:**
+- `tool-input-start`, `tool-input-delta`, `tool-input-available`, `tool-output-available`
+- Includes tool metadata (name, arguments, result)
+
+**Client SDK decides display:**
+- Which tools to show/hide
+- Whether to show input/output
+- Custom UI components per tool
 
 ## Display Modes
 
-Each tool can be configured with a `display` property that controls how it appears in the chat UI:
+Each tool can be configured with a `display` property in the **agent config** (interpreted by the client):
 
 ```json
 {
@@ -239,10 +250,26 @@ Each tool can be configured with a `display` property that controls how it appea
 }
 ```
 
-### Default Behavior
+### Default Behavior (Client SDK)
 
-- **Entity-visible tools**: Default to `{ mode: "full", showInput: true, showOutput: true }`
-- **Main Tools (internal)**: Default to `{ mode: "hidden" }`
+The client SDK applies these defaults when no explicit display config is provided:
+
+- **Additional tools**: Default to `{ mode: "full", showInput: true, showOutput: true }`
+- **Prebuilt tools (internal)**: Default to `{ mode: "hidden" }`
+
+### Permission-Based Visibility
+
+SmartSpaces have **secret key** (`sk_...`) for admin access and **public key** (`pk_...`) for regular access. The client SDK uses this to control prebuilt tool visibility:
+
+| Permission Level | Prebuilt Tools Display |
+|-----------------|------------------------|
+| **Admin** (secret key via `x-secret-key` header) | `full` - see tool name, input, and output |
+| **Regular** (public key via `x-public-key` + JWT) | `minimal` - see "tool called" indicator only, no input/output |
+
+This ensures:
+- **Security**: Sensitive internal tool data hidden from regular users
+- **Transparency**: Admins can debug and audit full agent behavior
+- **Clean UX**: Regular users see simple progress indicators without noise
 
 ---
 
@@ -255,7 +282,7 @@ Tools can have custom UI components that replace the default tool display. This 
 ## Architecture
 
 The Hsafa stack uses:
-- **`@hsafa/react-sdk`** — Hooks-only SDK for data fetching (`useSmartSpaceMessages`, `useHsafaClient`, etc.)
+- **`@hsafa/react`** — Hooks-only SDK for data fetching (`useMessages`, `useHsafaClient`, etc.)
 - **`@assistant-ui/react`** — UI primitives (`MessagePrimitive`, `ThreadPrimitive`, etc.)
 
 Custom tool UIs are registered via `MessagePrimitive.Content` components.
@@ -448,7 +475,7 @@ function DefaultToolUI({ toolName, args, status }: ToolUIProps) {
 
 ---
 
-# 🧰 Main Tools every Agent Entity should have
+# 🧰 Prebuilt tools every Agent Entity should have
 
 These are internal tools that Entities do not see or interact with:
 

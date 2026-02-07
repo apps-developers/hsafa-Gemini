@@ -1,10 +1,13 @@
-import { Router, type Router as ExpressRouter } from 'express';
+import { Router, type Router as ExpressRouter, type Request, type Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/db.js';
+import { redis } from '../lib/redis.js';
+import { toSSEEvent } from '../lib/run-events.js';
+import { requireSpaceAdmin, requireSecretKey } from '../middleware/auth.js';
 
 export const entitiesRouter: ExpressRouter = Router();
 
-entitiesRouter.post('/', async (req, res) => {
+entitiesRouter.post('/', requireSpaceAdmin(), async (req, res) => {
   try {
     const { type, externalId, displayName, metadata } = req.body;
 
@@ -31,7 +34,7 @@ entitiesRouter.post('/', async (req, res) => {
   }
 });
 
-entitiesRouter.post('/agent', async (req, res) => {
+entitiesRouter.post('/agent', requireSpaceAdmin(), async (req, res) => {
   try {
     const { agentId, externalId, displayName, metadata } = req.body;
 
@@ -64,7 +67,7 @@ entitiesRouter.post('/agent', async (req, res) => {
   }
 });
 
-entitiesRouter.get('/', async (req, res) => {
+entitiesRouter.get('/', requireSpaceAdmin(), async (req, res) => {
   try {
     const { type, limit = '50', offset = '0' } = req.query;
 
@@ -90,7 +93,7 @@ entitiesRouter.get('/', async (req, res) => {
   }
 });
 
-entitiesRouter.get('/:entityId', async (req, res) => {
+entitiesRouter.get('/:entityId', requireSpaceAdmin(), async (req, res) => {
   try {
     const { entityId } = req.params;
 
@@ -112,7 +115,7 @@ entitiesRouter.get('/:entityId', async (req, res) => {
   }
 });
 
-entitiesRouter.patch('/:entityId', async (req, res) => {
+entitiesRouter.patch('/:entityId', requireSpaceAdmin(), async (req, res) => {
   try {
     const { entityId } = req.params;
     const { displayName, metadata } = req.body;
@@ -135,7 +138,7 @@ entitiesRouter.patch('/:entityId', async (req, res) => {
   }
 });
 
-entitiesRouter.delete('/:entityId', async (req, res) => {
+entitiesRouter.delete('/:entityId', requireSpaceAdmin(), async (req, res) => {
   try {
     const { entityId } = req.params;
 
@@ -148,5 +151,133 @@ entitiesRouter.delete('/:entityId', async (req, res) => {
       error: 'Failed to delete entity',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
+  }
+});
+
+/**
+ * Entity Stream (subscribeAll) - SSE endpoint for Node.js services.
+ * 
+ * Subscribes to events from ALL SmartSpaces this entity is a member of
+ * via a single SSE connection. Requires secret key + entityId.
+ *
+ * Usage:
+ *   GET /api/entities/:entityId/stream
+ *   Headers: x-secret-key: sk_...
+ */
+entitiesRouter.get('/:entityId/stream', requireSecretKey(), async (req: Request, res: Response) => {
+  const { entityId } = req.params;
+
+  try {
+    // Verify entity exists
+    const entity = await prisma.entity.findUnique({
+      where: { id: entityId },
+      select: { id: true },
+    });
+
+    if (!entity) {
+      res.status(404).json({ error: 'Entity not found' });
+      return;
+    }
+
+    // Get all spaces this entity is a member of
+    const memberships = await prisma.smartSpaceMembership.findMany({
+      where: { entityId },
+      select: { smartSpaceId: true },
+    });
+
+    const spaceIds = memberships.map((m) => m.smartSpaceId);
+
+    if (spaceIds.length === 0) {
+      res.status(200).json({ message: 'Entity is not a member of any SmartSpace' });
+      return;
+    }
+
+    // Set up SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    let isActive = true;
+    req.on('close', () => { isActive = false; });
+
+    res.write(`: Connected entity ${entityId} to ${spaceIds.length} space(s)\n\n`);
+
+    // Subscribe to notify channels for all spaces
+    const subscriber = redis.duplicate();
+    const channels = spaceIds.map((id) => `smartSpace:${id}:notify`);
+    const spaceIdSet = new Set(spaceIds);
+
+    // Track last seen ID per space
+    const lastSeenIds: Record<string, string> = {};
+    for (const id of spaceIds) {
+      const streamKey = `smartSpace:${id}:stream`;
+      const last = await redis.xrevrange(streamKey, '+', '-', 'COUNT', 1);
+      lastSeenIds[id] = Array.isArray(last) && last.length > 0 ? last[0][0] : '0-0';
+    }
+
+    subscriber.on('message', async (channel: string) => {
+      if (!isActive) return;
+
+      // Extract spaceId from channel: smartSpace:<id>:notify
+      const parts = channel.split(':');
+      const spaceId = parts[1];
+      if (!spaceId || !spaceIdSet.has(spaceId)) return;
+
+      const streamKey = `smartSpace:${spaceId}:stream`;
+      const lastId = lastSeenIds[spaceId] || '0-0';
+
+      const newEvents = await redis.xread('STREAMS', streamKey, lastId);
+      if (newEvents && newEvents.length > 0) {
+        for (const [, messages] of newEvents) {
+          for (const [id, fields] of messages) {
+            if (!isActive) break;
+
+            const event = toSSEEvent(id, fields);
+            // Include smartSpaceId in the event for routing
+            const enriched = { ...event, smartSpaceId: spaceId };
+
+            res.write(`id: ${spaceId}:${id}\n`);
+            res.write(`event: hsafa\n`);
+            res.write(`data: ${JSON.stringify(enriched)}\n\n`);
+
+            lastSeenIds[spaceId] = id;
+          }
+        }
+      }
+    });
+
+    for (const ch of channels) {
+      await subscriber.subscribe(ch);
+    }
+
+    const keepAliveInterval = setInterval(() => {
+      if (isActive) {
+        res.write(': keepalive\n\n');
+      } else {
+        clearInterval(keepAliveInterval);
+      }
+    }, 30000);
+
+    req.on('close', async () => {
+      isActive = false;
+      clearInterval(keepAliveInterval);
+      for (const ch of channels) {
+        await subscriber.unsubscribe(ch);
+      }
+      await subscriber.quit();
+    });
+  } catch (error) {
+    console.error('[GET /api/entities/:entityId/stream] Error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Failed to start entity stream',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    } else {
+      res.write(`event: error\ndata: ${JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' })}\n\n`);
+      res.end();
+    }
   }
 });

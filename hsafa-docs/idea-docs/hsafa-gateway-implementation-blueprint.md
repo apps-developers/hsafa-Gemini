@@ -114,26 +114,15 @@ Your `schema.prisma` already contains the *right high-level* tables:
 - `Plan`
 - `Goal`
 
-### Important mismatches to fix (code vs schema)
+### Schema highlights
 
-The current `hsafa-gateway/src` code is partly from the older “agent ↔ run” model and needs alignment:
-
-- **Run fields mismatch**
-  - Schema: `Run(smartSpaceId, agentEntityId, agentId, triggeredById, parentRunId, ...)`
-  - Current code uses: `Run(agentId, ...)`
-- **ToolExecutionTarget mismatch**
-  - Schema enum: `server | client | external`
-  - Current code/tool config uses: `server | device | browser | external`
-- **Client model mismatch**
-  - `src/lib/websocket.ts` uses `prisma.device.upsert(...)`
-  - Schema has `Client` model; code should use `Client`
-
-### Recommendation
-
-- Use **`Client`** as the unified connection model for all surfaces (web, mobile, node).
-- Make tool execution target be **`server | client | external`** (schema), and encode client subtype in:
-  - `Client.clientType` (e.g. `web`, `mobile`, `node`)
-  - plus `Client.capabilities` JSON
+- **SmartSpace** has `publicKey` (`pk_...`) and `secretKey` (`sk_...`) fields for authentication — auto-generated on creation
+- **Entity** has `externalId` for mapping to external auth systems (e.g., JWT `sub` claim)
+- **Run** uses `smartSpaceId`, `agentEntityId`, `agentId`, `triggeredById`, `parentRunId`
+- **ToolExecutionTarget** enum: `server | client | external`
+- **Client** is the unified connection model for all surfaces (web, mobile, node)
+  - `Client.clientType` encodes subtype (e.g. `web`, `mobile`, `node`)
+  - `Client.capabilities` JSON for tool execution capabilities
 
 ---
 
@@ -199,24 +188,40 @@ The API is **SmartSpace-centric**: you subscribe to a SmartSpace to see all acti
 
 All endpoints are available via **REST API**, **SDKs** (React, React Native, Node), and **CLI**.
 
+### Authentication Summary
+
+All API requests require authentication via one of these headers:
+
+| Header | Purpose | Access Level |
+|--------|---------|--------------|
+| `x-admin-key` | Gateway admin key (`GATEWAY_ADMIN_KEY` env var) | Full gateway access — create spaces, manage all resources |
+| `x-secret-key` | SmartSpace secret key (`sk_...`) | Full admin access to a specific SmartSpace |
+| `x-public-key` + `Authorization: Bearer <JWT>` | Public key (`pk_...`) + user JWT | User-level access with membership enforcement |
+
+See **Section 13** for detailed auth patterns.
+
 ---
 
 ### 7.1 Agents (Control Plane)
 
 Agents are config definitions. An Agent Entity is created when you want an agent to participate in SmartSpaces.
 
+**Auth:** `x-admin-key` or `x-secret-key` required (space admin).
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/agents` | Create/upsert agent config → returns `agentId` |
 | `GET` | `/api/agents` | List all agents |
 | `GET` | `/api/agents/:agentId` | Get agent details |
-| `DELETE` | `/api/agents/:agentId` | Delete agent (soft delete) |
+| `DELETE` | `/api/agents/:agentId` | Delete agent |
 
 ---
 
 ### 7.2 Entities
 
 Entities are identities (human, agent, system) that can participate in SmartSpaces.
+
+**Auth:** `x-admin-key` or `x-secret-key` required (space admin).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -226,6 +231,7 @@ Entities are identities (human, agent, system) that can participate in SmartSpac
 | `GET` | `/api/entities/:entityId` | Get entity details |
 | `PATCH` | `/api/entities/:entityId` | Update entity (displayName, metadata) |
 | `DELETE` | `/api/entities/:entityId` | Delete entity |
+| `GET` | `/api/entities/:entityId/stream` | SSE stream of all SmartSpaces this entity belongs to |
 
 **Create Entity request:**
 ```json
@@ -246,19 +252,29 @@ Entities are identities (human, agent, system) that can participate in SmartSpac
 }
 ```
 
+**Entity Stream** (`GET /api/entities/:entityId/stream`):
+- **Auth:** `x-secret-key` required
+- Subscribes to events from **all** SmartSpaces this entity is a member of via a single SSE connection
+- Each event includes a `smartSpaceId` field for routing
+- Designed for Node.js services that need to listen to multiple spaces simultaneously
+
 ---
 
 ### 7.3 SmartSpaces
 
 SmartSpaces are shared context spaces. This is the **primary interaction point**.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/smart-spaces` | Create a SmartSpace |
-| `GET` | `/api/smart-spaces` | List SmartSpaces (for current entity) |
-| `GET` | `/api/smart-spaces/:smartSpaceId` | Get SmartSpace details |
-| `PATCH` | `/api/smart-spaces/:smartSpaceId` | Update SmartSpace (name, visibility) |
-| `DELETE` | `/api/smart-spaces/:smartSpaceId` | Delete SmartSpace |
+Each SmartSpace has auto-generated keys:
+- `publicKey` (`pk_...`) — identifies the space, grants read-level access when combined with JWT
+- `secretKey` (`sk_...`) — grants full admin access to the space
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/api/smart-spaces` | `x-admin-key` | Create a SmartSpace (returns keys) |
+| `GET` | `/api/smart-spaces` | Any auth | List SmartSpaces (JWT users see only their spaces) |
+| `GET` | `/api/smart-spaces/:smartSpaceId` | Any auth + membership | Get SmartSpace details |
+| `PATCH` | `/api/smart-spaces/:smartSpaceId` | Space admin | Update SmartSpace (name, visibility) |
+| `DELETE` | `/api/smart-spaces/:smartSpaceId` | Space admin | Delete SmartSpace |
 
 **Create SmartSpace request:**
 ```json
@@ -269,25 +285,38 @@ SmartSpaces are shared context spaces. This is the **primary interaction point**
 }
 ```
 
+**Response includes auto-generated keys:**
+```json
+{
+  "smartSpace": {
+    "id": "uuid",
+    "name": "Project Chat",
+    "publicKey": "pk_abc123...",
+    "secretKey": "sk_xyz789..."
+  }
+}
+```
+
 ---
 
 ### 7.4 SmartSpace Membership
 
 Manage who can participate in a SmartSpace.
 
+**Auth:** `x-admin-key` or `x-secret-key` required (space admin) for write operations. Any auth + membership for reads.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/smart-spaces/:smartSpaceId/members` | Add entity to SmartSpace |
 | `GET` | `/api/smart-spaces/:smartSpaceId/members` | List SmartSpace members |
+| `PATCH` | `/api/smart-spaces/:smartSpaceId/members/:entityId` | Update membership (role) |
 | `DELETE` | `/api/smart-spaces/:smartSpaceId/members/:entityId` | Remove entity from SmartSpace |
-| `PATCH` | `/api/smart-spaces/:smartSpaceId/members/:entityId` | Update membership (role, permissions) |
 
 **Add member request:**
 ```json
 {
   "entityId": "uuid",
-  "role": "member",
-  "permissions": { "canWrite": true, "canInvite": false }
+  "role": "member"
 }
 ```
 
@@ -297,12 +326,14 @@ Manage who can participate in a SmartSpace.
 
 Send and read messages in a SmartSpace. Posting a message **triggers Agent Runs**.
 
+**Auth:** Any auth + membership required.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/smart-spaces/:smartSpaceId/messages` | Send message (triggers agents) |
 | `GET` | `/api/smart-spaces/:smartSpaceId/messages` | Get message history |
 
-**Send message request:**
+**Send message request (secret key auth):**
 ```json
 {
   "content": "Hello, can you help me?",
@@ -310,6 +341,8 @@ Send and read messages in a SmartSpace. Posting a message **triggers Agent Runs*
   "metadata": {}
 }
 ```
+
+> **Note:** For JWT-authenticated users, `entityId` is auto-resolved from the JWT token to prevent impersonation. The `entityId` field in the body is ignored.
 
 **Query params for GET:**
 - `afterSeq` - get messages after this sequence number
@@ -322,12 +355,13 @@ Send and read messages in a SmartSpace. Posting a message **triggers Agent Runs*
 
 **Subscribe to a SmartSpace** to receive all real-time events (messages, runs, tool calls).
 
+**Auth:** Any auth + membership required.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/smart-spaces/:smartSpaceId/stream` | SSE stream of all SmartSpace activity |
 
 **Query params:**
-- `entityId` - required, identifies the subscribing entity
 - `afterSeq` - resume from sequence number (reconnect support)
 
 **Events streamed:**
@@ -338,14 +372,16 @@ Send and read messages in a SmartSpace. Posting a message **triggers Agent Runs*
 - `run.completed` - agent finished
 - `run.failed` - agent errored
 - `text.delta` - streaming text from agent
-- `tool.call` - agent called a tool (any member can respond)
-- `tool.result` - tool result received
+- `tool-input-available` - tool call input ready (any member can respond)
+- `tool-output-available` - tool result received
 
 ---
 
 ### 7.7 Tool Responses
 
-Respond to tool calls via the SmartSpace. You must be a member of the SmartSpace.
+Respond to tool calls via the SmartSpace. You must be authenticated and a member.
+
+**Auth:** Any auth + membership required.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -354,10 +390,9 @@ Respond to tool calls via the SmartSpace. You must be a member of the SmartSpace
 **Request:**
 ```json
 {
+  "runId": "uuid",
   "toolCallId": "uuid",
-  "entityId": "uuid",
-  "result": { ... },
-  "error": null
+  "result": { ... }
 }
 ```
 
@@ -365,15 +400,18 @@ Respond to tool calls via the SmartSpace. You must be a member of the SmartSpace
 
 ### 7.8 Runs (for debugging/history)
 
-Runs are created automatically when agents are triggered. These endpoints are for inspection.
+Runs are created automatically when agents are triggered. These endpoints are for inspection and management.
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/api/runs` | List runs (filter by smartSpaceId, agentEntityId) |
-| `GET` | `/api/runs/:runId` | Get run details |
-| `GET` | `/api/runs/:runId/events` | Get all run events |
-| `GET` | `/api/runs/:runId/stream` | SSE stream for specific run |
-| `POST` | `/api/runs/:runId/cancel` | Cancel a running execution |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/api/runs` | Space admin | List runs (filter by smartSpaceId, agentEntityId) |
+| `POST` | `/api/runs` | Space admin | Create a run manually |
+| `GET` | `/api/runs/:runId` | Any auth | Get run details |
+| `GET` | `/api/runs/:runId/events` | Any auth | Get all run events |
+| `GET` | `/api/runs/:runId/stream` | Any auth | SSE stream for specific run |
+| `POST` | `/api/runs/:runId/cancel` | Space admin | Cancel a running execution |
+| `DELETE` | `/api/runs/:runId` | Space admin | Delete a run and its events |
+| `POST` | `/api/runs/:runId/tool-results` | Any auth | Submit a tool result for a run |
 
 ---
 
@@ -381,11 +419,11 @@ Runs are created automatically when agents are triggered. These endpoints are fo
 
 Clients are connection surfaces (browser, mobile, node backend).
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/clients/register` | Register a client connection |
-| `GET` | `/api/clients` | List clients for an entity |
-| `DELETE` | `/api/clients/:clientId` | Disconnect/remove client |
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `POST` | `/api/clients/register` | Any auth | Register a client connection |
+| `GET` | `/api/clients` | Space admin | List clients for an entity |
+| `DELETE` | `/api/clients/:clientId` | Space admin | Disconnect/remove client |
 
 **Register client request:**
 ```json
@@ -407,30 +445,31 @@ Clients are connection surfaces (browser, mobile, node backend).
 
 Every SDK (React, React Native, Node) should expose:
 
-**Agents:**
+**Agents** (requires admin/secret key):
 - `createAgent(config)` / `deleteAgent(agentId)`
 - `listAgents()` / `getAgent(agentId)`
 
-**Entities:**
+**Entities** (requires admin/secret key):
 - `createEntity({ type, externalId, displayName })` / `deleteEntity(entityId)`
 - `createAgentEntity({ agentId, displayName })` / `listEntities()`
 
-**SmartSpaces:**
+**SmartSpaces** (requires admin key for create; any auth for read):
 - `createSmartSpace({ name, visibility })` / `deleteSmartSpace(smartSpaceId)`
 - `listSmartSpaces()` / `getSmartSpace(smartSpaceId)`
 - `addMember(smartSpaceId, entityId)` / `removeMember(smartSpaceId, entityId)`
 - `listMembers(smartSpaceId)`
 
-**Messaging:**
-- `sendMessage(smartSpaceId, { content, entityId })`
+**Messaging** (requires any auth + membership):
+- `sendMessage(smartSpaceId, { content, entityId? })` — entityId auto-resolved for JWT users
 - `getMessages(smartSpaceId, { afterSeq, limit })`
 
-**Streaming:**
-- `subscribeToSmartSpace(smartSpaceId, entityId, callbacks)` - returns unsubscribe function
+**Streaming** (requires any auth + membership):
+- `subscribeToSmartSpace(smartSpaceId, callbacks)` - returns unsubscribe function
+- `subscribeToEntity(entityId, callbacks)` - for services: single SSE for all spaces
 - Callbacks: `onMessage`, `onTextDelta`, `onToolCall`, `onRunStart`, `onRunEnd`, `onError`
 
-**Tool responses:**
-- `submitToolResult(smartSpaceId, { toolCallId, entityId, result })`
+**Tool responses** (requires any auth + membership):
+- `submitToolResult(smartSpaceId, { runId, toolCallId, result })`
 
 ---
 
@@ -440,7 +479,9 @@ Every SDK (React, React Native, Node) should expose:
 
 The primary streaming model is **SmartSpace-level**: subscribe to a SmartSpace to see all activity.
 
-**Endpoint:** `GET /api/smart-spaces/:smartSpaceId/stream?entityId=X&afterSeq=Y`
+**Endpoint:** `GET /api/smart-spaces/:smartSpaceId/stream?afterSeq=Y`
+
+**Auth:** Any auth method + membership required (via headers, not query params).
 
 **Why SmartSpace-level?**
 - See all agent activity in a context (multiple agents can be in one SmartSpace)
@@ -460,18 +501,32 @@ The primary streaming model is **SmartSpace-level**: subscribe to a SmartSpace t
 }
 ```
 
-### 8.2 Run-Level Streaming (Secondary)
+### 8.2 Entity-Level Streaming (for Services)
+
+For Node.js services that participate in multiple SmartSpaces, subscribe to all spaces via a single SSE connection:
+
+**Endpoint:** `GET /api/entities/:entityId/stream`
+
+**Auth:** `x-secret-key` required.
+
+- Multiplexes events from all SmartSpaces the entity is a member of
+- Each event includes `smartSpaceId` for routing
+- Event ID format: `smartSpaceId:redisStreamId` for per-space resume
+
+### 8.3 Run-Level Streaming (Secondary)
 
 For debugging or specific use cases, you can also stream a single run:
 
 **Endpoint:** `GET /api/runs/:runId/stream?since=X`
+
+**Auth:** Any auth required.
 
 This is useful for:
 - Admin/debug dashboards
 - Attaching to a specific run after the fact
 - Inspecting historical runs
 
-### 8.3 Reconnect Support
+### 8.4 Reconnect Support
 
 Both streams support reconnection:
 
@@ -479,7 +534,7 @@ Both streams support reconnection:
 - **Run stream:** pass `since` (Redis stream ID) to resume
 - SSE `Last-Event-ID` header also works
 
-### 8.4 Event Types (Canonical)
+### 8.5 Event Types (Canonical)
 
 **SmartSpace-level events:**
 - `smartSpace.message` - new message in the SmartSpace
@@ -499,8 +554,10 @@ Both streams support reconnection:
 - `step.start` / `step.finish` - LLM call boundaries
 
 **Tool events:**
-- `tool.call` - agent called a tool (any SmartSpace member can respond)
-- `tool.result` - tool result received
+- `tool-input-start` - tool call started (streaming input)
+- `tool-input-delta` - incremental tool call input
+- `tool-input-available` - tool call input ready (any SmartSpace member can respond)
+- `tool-output-available` - tool result received
 
 **Message events:**
 - `message.user` - user message written to timeline
@@ -525,7 +582,9 @@ pnpm add -g @hsafa/cli
 
 ```bash
 hsafa config set gateway-url http://localhost:3001
-hsafa config set api-key <your-key>
+hsafa config set admin-key <your-gateway-admin-key>
+# or for space-scoped access:
+hsafa config set secret-key <your-space-secret-key>
 ```
 
 ### Agent Commands
@@ -711,10 +770,10 @@ When `ToolResult` arrives:
 
 Add `visibility` to tool calls (in `ToolCall` metadata):
 
-- `internal` (Main Tools)
+- `internal` (Prebuilt tools)
   - never written into the SmartSpace timeline
   - only stored as Run events
-- `entity-visible`
+- `additional`
   - written into the SmartSpace timeline as an assistant tool-call part
   - any SmartSpace member can see and respond
 
@@ -795,69 +854,105 @@ Start with:
 
 ---
 
-## 13) Security & Identity (minimum viable)
+## 13) Security & Identity (implemented)
 
-Even for MVP, define:
+The Gateway implements a **3-tier authentication system** with per-SmartSpace keys and optional JWT verification for human users.
 
-- **Gateway API auth**
-  - Bearer token from your app
-- **Entity identity**
-  - map your app’s user id -> `Entity.externalId`
-- **Client identity**
-  - stable `clientKey` signed into a token
-  - never trust `clientKey` without verification
-- **Authorization**
-  - only members of a SmartSpace can read/write
-  - private SmartSpaces must enforce membership checks
+### 13.1 Authentication Tiers
 
-### 13.1 Authentication Patterns
+#### Tier 1: Gateway Admin Key
 
-The Gateway supports two authentication patterns depending on the caller type:
-
-#### Pattern A: User via React SDK (JWT passthrough)
-
-For browser/mobile clients, the user's existing JWT is passed directly to the Gateway:
+For gateway-wide operations (creating SmartSpaces, managing entities/agents).
 
 ```
-┌─────────────────┐                    ┌─────────────┐
-│   React SDK     │ ──────────────────▶│   Gateway   │
-│   (browser)     │   Authorization:   │             │
-│                 │   Bearer <userJWT> │  verifies   │
-└─────────────────┘                    └─────────────┘
+┌─────────────────┐                         ┌─────────────┐
+│  Admin Backend   │ ──────────────────────▶ │   Gateway   │
+│  or CLI          │   x-admin-key: gk_...  │             │
+└─────────────────┘                         └─────────────┘
+```
+
+- Set via `GATEWAY_ADMIN_KEY` environment variable
+- Grants full access to all gateway operations
+- **Never expose to clients** — only used by your backend or CLI
+
+#### Tier 2: SmartSpace Secret Key
+
+For space-scoped admin operations and Node.js service access.
+
+```
+┌─────────────────┐                         ┌─────────────┐
+│  Node.js         │ ──────────────────────▶ │   Gateway   │
+│  Service         │  x-secret-key: sk_...  │             │
+│                  │  + entityId in body     │  trusts     │
+└─────────────────┘                         └─────────────┘
+```
+
+- Each SmartSpace has a unique `secretKey` (`sk_...`), auto-generated on creation
+- Grants full admin access to that specific SmartSpace
+- Services pass `entityId` in request body (trusted because secret key = admin)
+- Used for: sending messages on behalf of entities, managing members, creating runs
+
+**Service usage:**
+
+```ts
+await fetch(`${GATEWAY_URL}/api/smart-spaces/${smartSpaceId}/messages`, {
+  method: 'POST',
+  headers: {
+    'x-secret-key': process.env.SMARTSPACE_SECRET_KEY,  // sk_...
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    content: 'Hello from the service',
+    entityId: 'system-entity-uuid',
+  }),
+});
+```
+
+#### Tier 3: Public Key + JWT (Human Users)
+
+For browser/mobile clients where human users authenticate via their existing auth provider.
+
+```
+┌─────────────────┐                              ┌─────────────┐
+│   React SDK     │ ────────────────────────────▶ │   Gateway   │
+│   (browser)     │  x-public-key: pk_...        │             │
+│                 │  Authorization: Bearer <JWT>  │  verifies   │
+└─────────────────┘                              └─────────────┘
 ```
 
 **How it works:**
 
 1. User logs into the app (Auth0, Firebase, Supabase, Clerk, etc.)
 2. App receives a JWT for the user
-3. React SDK sends that JWT in every request to Gateway
-4. Gateway verifies the JWT and extracts user identity
-5. Gateway maps JWT `sub` claim → `Entity.externalId`
+3. React SDK sends `x-public-key` (identifies the SmartSpace) + `Authorization: Bearer <JWT>` (identifies the user)
+4. Gateway verifies the JWT (via shared secret or JWKS URL)
+5. Gateway extracts the configured claim (default: `sub`) → maps to `Entity.externalId`
+6. Gateway checks that the resolved entity is a **member** of the SmartSpace
+7. For `POST /messages`, `entityId` is auto-resolved from JWT (prevents impersonation)
 
 **SDK usage:**
 
 ```tsx
-useHsafaGateway({
-  gatewayUrl: 'https://gateway.example.com',
-  agentId: 'my-agent',
-  authToken: userJwt,  // user's JWT from their auth provider
-});
+<HsafaProvider
+  gatewayUrl="https://gateway.example.com"
+  publicKey="pk_abc123..."   // identifies the SmartSpace
+  jwt={userJwt}              // user's JWT from their auth provider
+>
+  <MyApp />
+</HsafaProvider>
 ```
 
-**Gateway config (per tenant/app):**
+**Gateway environment config:**
 
-```ts
-{
-  // Option 1: JWKS URL (recommended for Auth0, Firebase, Cognito, Clerk)
-  jwksUrl: "https://your-auth-domain/.well-known/jwks.json",
-  
-  // Option 2: Shared secret (for Supabase, custom JWT)
-  jwtSecret: "your-jwt-secret",
-  
-  // Claim mapping
-  userIdClaim: "sub",  // which claim contains the user ID
-  issuer: "https://your-auth-domain/",  // optional: validate issuer
-}
+```bash
+# Option 1: Shared secret (for Supabase, custom JWT)
+JWT_SECRET="your-jwt-secret"
+
+# Option 2: JWKS URL (for Auth0, Firebase, Cognito, Clerk)
+JWKS_URL="https://your-auth-domain/.well-known/jwks.json"
+
+# Which JWT claim maps to Entity.externalId (default: "sub")
+JWT_ENTITY_CLAIM="sub"
 ```
 
 **Supported auth services:**
@@ -872,116 +967,133 @@ useHsafaGateway({
 | Keycloak | JWKS: `https://{host}/realms/{realm}/protocol/openid-connect/certs` |
 | Custom | Your own secret or key pair |
 
-#### Pattern B: Service/Robot (direct API key)
+### 13.2 Middleware Stack
 
-For backend services, robots, or Node.js apps, use a Gateway API key directly:
+The gateway uses composable Express middleware:
 
-```
-┌─────────────────┐                    ┌─────────────┐
-│   Node.js       │ ──────────────────▶│   Gateway   │
-│   Service       │   Authorization:   │             │
-│                 │   Bearer <apiKey>  │  trusts     │
-└─────────────────┘   + entityId       └─────────────┘
-```
+| Middleware | Header(s) | Purpose |
+|------------|-----------|---------|
+| `requireGatewayAdmin()` | `x-admin-key` | Gateway-wide operations |
+| `requireSecretKey()` | `x-secret-key` | Space-scoped admin access |
+| `requirePublicKeyJWT()` | `x-public-key` + `Authorization` | Human user access |
+| `requireAuth()` | Any of the above | Accepts any auth method |
+| `requireSpaceAdmin()` | `x-admin-key` or `x-secret-key` | Admin-only operations |
+| `requireMembership()` | (chained after auth) | Verifies entity is a SmartSpace member |
 
-**How it works:**
+### 13.3 Route Protection Summary
 
-1. Service has a Gateway API key (stored securely in env vars)
-2. Service calls Gateway with API key + its own `entityExternalId`
-3. Gateway trusts the API key and maps the entity
+| Route Category | Auth Required |
+|----------------|---------------|
+| Create SmartSpace | Gateway admin (`x-admin-key`) |
+| Update/Delete SmartSpace, Manage members | Space admin (`x-admin-key` or `x-secret-key`) |
+| Send messages, Read messages, Stream, Tool results | Any auth + membership check |
+| Entity/Agent/Client CRUD | Space admin |
+| Run management (create, cancel, delete) | Space admin |
+| Run read (get, events, stream) | Any auth |
+| Entity stream (subscribeAll) | Secret key (`x-secret-key`) |
 
-**Service usage:**
+### 13.4 Identity Summary
 
-```ts
-await fetch(`${GATEWAY_URL}/api/runs/${runId}/messages`, {
-  headers: {
-    'Authorization': `Bearer ${process.env.GATEWAY_API_KEY}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    message,
-    entityExternalId: 'service_scheduler_01',  // system entity ID
-  }),
-});
-```
+| Caller | Auth method | Header | Entity mapping |
+|--------|-------------|--------|----------------|
+| Admin backend / CLI | Gateway admin key | `x-admin-key` | N/A (full access) |
+| Node.js service | SmartSpace secret key | `x-secret-key` | `entityId` in request body |
+| Browser / React SDK | Public key + JWT | `x-public-key` + `Authorization` | JWT claim → `Entity.externalId` |
+| Mobile app | Public key + JWT | `x-public-key` + `Authorization` | JWT claim → `Entity.externalId` |
 
-### 13.2 Identity Summary
-
-| Caller | Auth method | Entity mapping |
-|--------|-------------|----------------|
-| Browser/React SDK | User's JWT | JWT `sub` → `Entity.externalId` |
-| Mobile app | User's JWT | JWT `sub` → `Entity.externalId` |
-| Node.js service | Gateway API key | Request body `entityExternalId` |
-| Robot/IoT | Gateway API key | Request body `entityExternalId` |
-
-**Key principle:** The browser never sees the Gateway API key. Users authenticate with their existing auth provider, and the Gateway verifies their JWT directly.
+**Key principles:**
+- The browser **never** sees admin keys or secret keys
+- Human users authenticate with their existing auth provider; the gateway verifies their JWT directly
+- JWT users cannot impersonate other entities — `entityId` is resolved from the token
+- Membership is enforced for all space-scoped read/write operations
 
 ---
 
 ## 14) Implementation Plan (phased)
 
-### Phase 1 — Align runtime with schema (must-do)
+### Phase 1 — Align runtime with schema ✅ DONE
 
-- Replace `agentId`-centric Run creation with SmartSpace model:
-  - create `Entity` for agents
-  - create `SmartSpace` and memberships
-  - create `Run` with `smartSpaceId` + `agentEntityId`
-- Standardize ToolExecutionTarget:
-  - use `server | client | external`
-- Fix WebSocket connection to use `Client` model
+- ✅ Replace `agentId`-centric Run creation with SmartSpace model
+- ✅ Create `Entity` for agents, `SmartSpace` and memberships
+- ✅ Create `Run` with `smartSpaceId` + `agentEntityId`
+- ✅ Standardize ToolExecutionTarget: `server | client | external`
 
-### Phase 2 — SmartSpace APIs + Triggering
+### Phase 2 — SmartSpace APIs + Triggering ✅ DONE
 
-- Add `/api/smart-spaces/*` endpoints
-- Implement `POST /api/smart-spaces/:id/messages` trigger logic
+- ✅ Full CRUD for SmartSpaces, Entities, Agents, Clients
+- ✅ SmartSpace membership management
+- ✅ `POST /api/smart-spaces/:id/messages` with agent triggering
+- ✅ SmartSpace-level SSE streaming with reconnect
+- ✅ Run-level SSE streaming with reconnect
+- ✅ Tool result submission endpoint
 
-### Phase 3 — Distributed tools (client execution)
+### Phase 3 — Authentication & Authorization ✅ DONE
+
+- ✅ Gateway admin key (`x-admin-key`)
+- ✅ Per-SmartSpace secret key (`x-secret-key`) + public key (`x-public-key`)
+- ✅ JWT verification (shared secret + JWKS URL)
+- ✅ Membership enforcement middleware
+- ✅ Entity auto-resolve from JWT (prevents impersonation)
+- ✅ Entity stream endpoint (subscribeAll for services)
+- ✅ All routes protected with appropriate auth middleware
+
+### Phase 4 — SDKs (next)
+
+- Node.js SDK (`@hsafa/node`)
+- React SDK (`@hsafa/react`)
+- CLI (`@hsafa/cli`)
+
+### Phase 5 — Distributed tools (client execution)
 
 - Implement tool call routing:
   - select target client by capabilities
   - inbox persistence
   - resume flow
 
-### Phase 4 — Plans + Memory
+### Phase 6 — Plans + Memory
 
 - Add scheduler worker
 - Add memory tools as internal tools
 
 ---
 
-## 15) Notes on Existing Code (quick audit)
+## 15) Current Code Status
 
-### What is already good
+### What is implemented and working
 
-- Run streaming pipeline:
-  - Redis Stream + pub/sub + Postgres `RunEvent` persistence
-- Agent building:
-  - `ToolLoopAgent`
-  - MCP tool loading
-- React SDK:
-  - robust run re-hydration logic
-  - tool call handling for browser/UI tools
+- **Full SmartSpace-centric API** with CRUD for all resources
+- **Run streaming pipeline**: Redis Stream + pub/sub + Postgres `RunEvent` persistence
+- **Agent building**: `ToolLoopAgent` with MCP tool loading
+- **Agent triggering**: posting a message auto-triggers agent runs for all agent members
+- **SmartSpace-level SSE streaming** with reconnect support (`afterSeq`)
+- **Run-level SSE streaming** with reconnect support (`since`)
+- **Entity stream** (subscribeAll): single SSE for services across all spaces
+- **Tool result submission** via SmartSpace and Run endpoints
+- **3-tier authentication**: gateway admin key, SmartSpace secret/public keys, JWT
+- **Membership enforcement** on all space-scoped operations
+- **Anti-impersonation**: JWT users' entityId auto-resolved from token
 
-### What must be refactored
+### What is not yet implemented
 
-- `runs.ts` currently assumes `Run.agentId` exists (it doesn’t in schema)
-- Tool execution targets and enum values must match schema
-- WebSocket device registration currently depends on a missing Prisma model
+- Client-side tool execution routing (WebSocket dispatch to specific clients)
+- Plans (scheduled runs) and Goals
+- Memory tools (long-term agent memory)
+- SDKs (Node.js, React, CLI)
 
 ---
 
-## 16) Definition of Done (MVP)
+## 16) Definition of Done (MVP) — Status
 
-- You can create a SmartSpace, add Entities, and post a user message
-- Agent Entities in that SmartSpace trigger Runs
-- Runs stream incremental events to the UI with reconnect support
-- Tools can execute:
-  - on server
-  - on a client (browser/device) and resume correctly
-- All timeline messages are persisted and reload correctly
+- ✅ You can create a SmartSpace, add Entities, and post a user message
+- ✅ Agent Entities in that SmartSpace trigger Runs
+- ✅ Runs stream incremental events with reconnect support
+- ✅ All API routes are authenticated and authorized
+- ✅ All timeline messages are persisted and reload correctly
+- ⬜ Tools can execute on a client (browser/device) and resume correctly
+- ⬜ SDKs for Node.js, React, and CLI
 
 ---
 
 ## Status
 
-- **Blueprint created**. Next step is to implement the Phase 1 alignment changes in `hsafa-gateway` (code + schema enum alignment + WebSocket client model).
+- **Gateway core is complete.** SmartSpace-centric API, authentication, streaming, and agent triggering are all implemented. Next step is building the SDKs (Node.js, React, CLI).

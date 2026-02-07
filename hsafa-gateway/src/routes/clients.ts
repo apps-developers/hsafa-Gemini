@@ -1,10 +1,11 @@
 import { Router, type Router as ExpressRouter } from 'express';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/db.js';
+import { requireAuth, requireSpaceAdmin } from '../middleware/auth.js';
 
 export const clientsRouter: ExpressRouter = Router();
 
-clientsRouter.post('/register', async (req, res) => {
+clientsRouter.post('/register', requireAuth(), async (req, res) => {
   try {
     const { entityId, clientKey, clientType, displayName, capabilities } = req.body;
 
@@ -47,7 +48,7 @@ clientsRouter.post('/register', async (req, res) => {
   }
 });
 
-clientsRouter.get('/', async (req, res) => {
+clientsRouter.get('/', requireSpaceAdmin(), async (req, res) => {
   try {
     const { entityId } = req.query;
 
@@ -70,7 +71,7 @@ clientsRouter.get('/', async (req, res) => {
   }
 });
 
-clientsRouter.delete('/:clientId', async (req, res) => {
+clientsRouter.delete('/:clientId', requireSpaceAdmin(), async (req, res) => {
   try {
     const { clientId } = req.params;
     await prisma.client.delete({ where: { id: clientId } });

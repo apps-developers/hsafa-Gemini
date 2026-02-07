@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { convertToModelMessages } from 'ai';
+import { parse as parsePartialJson, STR, OBJ, ARR, NUM, BOOL, NULL } from 'partial-json';
 import { prisma } from './db.js';
 import { createEmitEvent, handleRunError, type EmitEventFn } from './run-events.js';
 import { buildAgent, AgentBuildError } from '../agent-builder/builder.js';
@@ -7,6 +8,23 @@ import type { AgentConfig } from '../agent-builder/types.js';
 import { emitSmartSpaceEvent } from './smartspace-events.js';
 import { createSmartSpaceMessage } from './smartspace-db.js';
 import { toUiMessageFromSmartSpaceMessage, toAiSdkUiMessages } from './message-converters.js';
+import { triggerAgentsInSmartSpace } from './agent-trigger.js';
+
+// Allow all partial JSON types for tool input streaming
+const PARTIAL_JSON_ALLOW = STR | OBJ | ARR | NUM | BOOL | NULL;
+
+/**
+ * Run Runner - Full Streaming
+ * 
+ * Streams ALL AI response events to Redis/SmartSpace:
+ * - Text: `text-start` / `text-delta` / `text-end`
+ * - Reasoning: `reasoning-start` / `reasoning-delta` / `reasoning-end`
+ * - Tools: `tool-input-start` / `tool-input-delta` / `tool-input-available` / `tool-output-available`
+ * - Lifecycle: `start` / `finish` / `run.started` / `run.completed` / `run.failed`
+ * 
+ * Node.js clients can subscribe to SmartSpace stream, see tool-input-available,
+ * execute tools locally, and POST results back to /tool-results endpoint.
+ */
 
 export async function executeRun(runId: string): Promise<void> {
   const run = await prisma.run.findUnique({
@@ -28,13 +46,19 @@ export async function executeRun(runId: string): Promise<void> {
 
   const { emitEvent: emitRunEvent } = await createEmitEvent(runId);
 
+  // Event context includes entity info for multi-entity support
+  // All subscribers can see which entity (agent) produced each event
+  const eventContext = {
+    runId,
+    entityId: run.agentEntityId,
+    entityType: 'agent' as const,
+    agentEntityId: run.agentEntityId, // backwards compat
+  };
+
   const emitEvent: EmitEventFn = async (type, payload) => {
     await emitRunEvent(type, payload);
     try {
-      await emitSmartSpaceEvent(run.smartSpaceId, type, payload, {
-        runId,
-        agentEntityId: run.agentEntityId,
-      });
+      await emitSmartSpaceEvent(run.smartSpaceId, type, payload, eventContext);
     } catch (err) {
       console.error(`[run-runner] emitSmartSpaceEvent FAILED for ${type}:`, err);
     }
@@ -86,43 +110,120 @@ export async function executeRun(runId: string): Promise<void> {
 
     const streamResult = await built.agent.stream({ messages: modelMessages });
 
-    let stepIndex = 0;
+    // State for streaming
+    const messageId = `msg-${runId}-${Date.now()}`;
+    let textId: string | null = null;
+    let reasoningId: string | null = null;
+    const toolArgsAccumulator = new Map<string, string>(); // toolCallId -> accumulated args text
+    const toolParts: Array<{ type: string; [key: string]: unknown }> = [];
 
+    await emitEvent('start', { messageId });
+
+    // Stream ALL events to Redis
     for await (const part of streamResult.fullStream) {
-      switch (part.type) {
-        case 'start-step':
-          stepIndex++;
-          await emitEvent('step.start', { step: stepIndex });
-          break;
+      const t = part.type as string;
 
-        case 'text-delta':
-          await emitEvent('text.delta', { delta: part.text });
-          break;
-
-        case 'finish-step':
-          await emitEvent('step.finish', {
-            step: stepIndex,
-            finishReason: part.finishReason,
-            usage: part.usage,
+      // Text streaming
+      if (t === 'text-delta') {
+        const delta = (part as any).text || (part as any).textDelta || '';
+        if (!delta) continue;
+        if (!textId) {
+          textId = `text-${messageId}-${Date.now()}`;
+          await emitEvent('text-start', { id: textId });
+        }
+        await emitEvent('text-delta', { id: textId, delta });
+      }
+      // Reasoning streaming
+      else if (t === 'reasoning') {
+        const delta = (part as any).text || '';
+        if (!delta) continue;
+        if (!reasoningId) {
+          reasoningId = `reasoning-${messageId}-${Date.now()}`;
+          await emitEvent('reasoning-start', { id: reasoningId });
+        }
+        await emitEvent('reasoning-delta', { id: reasoningId, delta });
+      }
+      // Tool call streaming start
+      else if (t === 'tool-call-streaming-start') {
+        const { toolCallId, toolName } = part as any;
+        toolArgsAccumulator.set(toolCallId, '');
+        await emitEvent('tool-input-start', { toolCallId, toolName });
+      }
+      // Tool call args delta (streaming structured JSON partials)
+      else if (t === 'tool-call-delta') {
+        const { toolCallId, argsTextDelta } = part as any;
+        if (argsTextDelta) {
+          const accumulated = (toolArgsAccumulator.get(toolCallId) || '') + argsTextDelta;
+          toolArgsAccumulator.set(toolCallId, accumulated);
+          
+          // Parse partial JSON using partial-json library
+          // This gives us valid partial objects even from incomplete JSON
+          let partialInput: unknown = null;
+          try {
+            partialInput = parsePartialJson(accumulated, PARTIAL_JSON_ALLOW);
+          } catch {
+            // Malformed JSON - emit null for partialInput
+          }
+          
+          // Emit structured partial - clients always get valid partial JSON
+          await emitEvent('tool-input-delta', {
+            toolCallId,
+            delta: argsTextDelta,        // raw text delta
+            accumulated,                  // raw accumulated text
+            partialInput,                 // VALID partial JSON object
           });
-          break;
-
-        case 'finish':
-          await emitEvent('stream.finish', {
-            finishReason: part.finishReason,
-            usage: part.totalUsage,
-          });
-          break;
-
-        case 'error':
-          await emitEvent('stream.error', {
-            error: part.error instanceof Error ? part.error.message : String(part.error),
-          });
-          break;
+        }
+      }
+      // Tool call complete - full input available
+      else if (t === 'tool-call') {
+        const { toolCallId, toolName, args } = part as any;
+        
+        // Close text/reasoning blocks if open
+        if (textId) { await emitEvent('text-end', { id: textId }); textId = null; }
+        if (reasoningId) { await emitEvent('reasoning-end', { id: reasoningId }); reasoningId = null; }
+        
+        // Emit full structured input - clients can execute this tool
+        await emitEvent('tool-input-available', { toolCallId, toolName, input: args });
+        
+        // Track for final message
+        toolParts.push({ type: 'tool-call', toolCallId, toolName, args });
+      }
+      // Tool result - output available
+      else if (t === 'tool-result') {
+        const { toolCallId, toolName, result } = part as any;
+        await emitEvent('tool-output-available', { toolCallId, toolName, output: result });
+        toolParts.push({ type: 'tool-result', toolCallId, toolName, result });
+      }
+      // Stream finish
+      else if (t === 'finish') {
+        if (textId) await emitEvent('text-end', { id: textId });
+        if (reasoningId) await emitEvent('reasoning-end', { id: reasoningId });
+      }
+      // Error
+      else if (t === 'error') {
+        const err = (part as any).error;
+        await emitEvent('stream.error', { error: err instanceof Error ? err.message : String(err) });
+      }
+      // Other events (sources, files, steps) - emit as-is for full visibility
+      else if (t === 'source-url' || t === 'source-document') {
+        await emitEvent(t, part as any);
       }
     }
 
+    // Use AI SDK's built-in accumulation (no manual tracking needed)
     const finalText = await streamResult.text;
+    const finalReasoning = await streamResult.reasoning;
+
+    // Build final message using SDK values + tool parts
+    const finalParts: Array<{ type: string; [key: string]: unknown }> = [];
+    if (finalReasoning) {
+      finalParts.push({ type: 'reasoning', text: finalReasoning });
+    }
+    if (finalText) {
+      finalParts.push({ type: 'text', text: finalText });
+    }
+    // Add tool calls and results to message parts
+    finalParts.push(...toolParts);
 
     await prisma.run.update({
       where: { id: runId },
@@ -130,9 +231,9 @@ export async function executeRun(runId: string): Promise<void> {
     });
 
     const assistantMessage = {
-      id: `msg-${Date.now()}-assistant`,
+      id: messageId,
       role: 'assistant',
-      parts: [{ type: 'text', text: finalText }],
+      parts: finalParts.length > 0 ? finalParts : [{ type: 'text', text: finalText }],
     };
 
     await createSmartSpaceMessage({
@@ -152,7 +253,25 @@ export async function executeRun(runId: string): Promise<void> {
     );
 
     await emitEvent('message.assistant', { message: assistantMessage });
+    
+    // Emit finish with full message
+    await emitEvent('finish', { messageId, message: assistantMessage });
+    
     await emitEvent('run.completed', { status: 'completed', text: finalText });
+
+    // Trigger other agents in the SmartSpace (agent message triggers other agents)
+    // Get triggerDepth from run metadata for loop protection
+    const runMetadata = await prisma.run.findUnique({
+      where: { id: runId },
+      select: { metadata: true },
+    });
+    const triggerDepth = (runMetadata?.metadata as any)?.triggerDepth ?? 0;
+    
+    await triggerAgentsInSmartSpace({
+      smartSpaceId: run.smartSpaceId,
+      senderEntityId: run.agentEntityId,
+      triggerDepth,
+    });
   } catch (error) {
     if (error instanceof AgentBuildError) {
       await emitRunEvent('agent.build.error', { error: error.message });
