@@ -6,6 +6,7 @@ import {
   MessagePrimitive,
 } from "@assistant-ui/react";
 import { ReasoningPart } from "./HsafaReasoning";
+import { ToolCallPart } from "./HsafaToolCall";
 
 // =============================================================================
 // HsafaThread — Prebuilt full chat thread
@@ -189,6 +190,9 @@ function HsafaAssistantMessage() {
         <MessagePrimitive.Parts
           components={{
             Reasoning: ReasoningPart,
+            tools: {
+              Fallback: ToolCallPart,
+            },
           }}
         />
       </div>

@@ -7,7 +7,7 @@ import {
   useMessage,
 } from "@assistant-ui/react";
 import { useMembers } from "@hsafa/ui";
-import { ArrowUpIcon, SquareIcon, ChevronRightIcon, LoaderIcon } from "lucide-react";
+import { ArrowUpIcon, SquareIcon, ChevronRightIcon, LoaderIcon, CheckIcon, XIcon, WrenchIcon } from "lucide-react";
 import { type ReactNode, useState, useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -176,6 +176,114 @@ function ReasoningBlock({
   );
 }
 
+function ToolCallBlock({
+  toolName,
+  argsText,
+  result,
+  status,
+}: {
+  toolName: string;
+  argsText: string;
+  args: unknown;
+  result?: unknown;
+  status: { type: string; reason?: string };
+  toolCallId: string;
+}) {
+  const isRunning = status?.type === "running";
+  const isComplete = status?.type === "complete";
+  const isError = status?.type === "incomplete" && status?.reason === "error";
+  const isCancelled = status?.type === "incomplete" && status?.reason === "cancelled";
+  const [open, setOpen] = useState(false);
+
+  const displayName = toolName
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[_-]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+  return (
+    <div
+      className={`mb-2 rounded-lg border overflow-hidden ${
+        isCancelled
+          ? "border-muted-foreground/30 bg-muted/30"
+          : isError
+            ? "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"
+            : "border-border bg-muted/30"
+      }`}
+    >
+      <button
+        onClick={() => setOpen(!open)}
+        type="button"
+        className={`flex w-full items-center gap-1.5 px-3 py-2 text-xs hover:bg-muted/50 transition-colors ${
+          isError ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+        }`}
+      >
+        {isRunning ? (
+          <LoaderIcon className="size-3 animate-spin" />
+        ) : isError ? (
+          <XIcon className="size-3" />
+        ) : isComplete ? (
+          <CheckIcon className="size-3 text-emerald-600" />
+        ) : (
+          <WrenchIcon className="size-3" />
+        )}
+        <span className="font-medium">
+          {isRunning ? `Running ${displayName}…` : displayName}
+        </span>
+        {isRunning && (
+          <span className="flex-1 h-0.5 rounded-full bg-gradient-to-r from-transparent via-primary/30 to-transparent animate-pulse" />
+        )}
+        {!isRunning && (
+          <ChevronRightIcon
+            className={`ml-auto size-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      <div
+        className="transition-[grid-template-rows] duration-250 ease-in-out"
+        style={{
+          display: "grid",
+          gridTemplateRows: open ? "1fr" : "0fr",
+        }}
+      >
+        <div className="overflow-hidden">
+          <div className="px-3 pb-2 font-mono text-[11px]">
+            {argsText && argsText !== "{}" && (
+              <div className={result != null ? "mb-2" : ""}>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 font-sans">
+                  Input
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-muted-foreground leading-relaxed">
+                  {formatJson(argsText)}
+                </pre>
+              </div>
+            )}
+            {result != null && (
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60 mb-1 font-sans">
+                  Output
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-muted-foreground leading-relaxed">
+                  {typeof result === "string"
+                    ? result
+                    : JSON.stringify(result, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatJson(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
+  }
+}
+
 function UserMessage() {
   const { membersById, currentEntityId } = useMembers();
   const entityId = useMessage((m) => (m.metadata as any)?.custom?.entityId as string | undefined);
@@ -220,6 +328,9 @@ function AssistantMessage() {
           components={{
             Text: TextWithCaret,
             Reasoning: ReasoningBlock,
+            tools: {
+              Fallback: ToolCallBlock,
+            },
           }}
         />
       </div>

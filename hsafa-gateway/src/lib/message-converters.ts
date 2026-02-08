@@ -30,13 +30,15 @@ export function toUiMessageFromSmartSpaceMessage(m: {
 export function toAiSdkUiMessages(rawUiMessages: Array<{ id?: string; role?: string; parts?: unknown }>) {
   const toolResultsById = new Map<string, unknown>();
   
+  // Collect tool results from ALL messages:
+  // - role:'tool' messages with tool-result parts (legacy)
+  // - assistant messages with tool-result parts (current: tool-call + tool-result stored together)
   for (const m of rawUiMessages) {
-    if (m?.role !== 'tool') continue;
-    const parts = Array.isArray(m.parts) ? (m.parts as any[]) : [];
+    const parts = Array.isArray(m?.parts) ? (m.parts as any[]) : [];
     for (const p of parts) {
       if (!p || typeof p !== 'object') continue;
       if (p.type === 'tool-result' && typeof p.toolCallId === 'string') {
-        toolResultsById.set(p.toolCallId, (p as any).output);
+        toolResultsById.set(p.toolCallId, p.result ?? p.output);
       }
     }
   }

@@ -1,11 +1,13 @@
 import { jsonSchema, tool, type ToolExecutionOptions } from 'ai';
 import type { ToolConfig } from './types';
+import type { PrebuiltToolContext } from './builder';
 import { executeBasic, isNoExecutionBasic } from './tools/basic';
 import { executeRequest } from './tools/request';
 import { executeWaiting } from './tools/waiting';
 import { executeCompute } from './tools/compute';
 import { executeAiAgent } from './tools/ai-agent';
 import { executeImageGenerator } from './tools/image-generator';
+import { getPrebuiltHandler } from './prebuilt-tools/registry';
 
 /**
  * Determines the execution target for a tool based on its configuration.
@@ -26,7 +28,7 @@ export function getToolExecutionTarget(
     return 'server';
   }
 
-  // All other execution types (request, compute, ai-agent, image-generator, waiting) run on server
+  // All other execution types (request, compute, ai-agent, image-generator, waiting, prebuilt) run on server
   return 'server';
 }
 
@@ -40,7 +42,7 @@ const defaultPromptSchema = {
 
 const emptyObjectSchema = { type: 'object', properties: {} } as const;
 
-export function buildTool(config: ToolConfig) {
+export function buildTool(config: ToolConfig, runContext?: PrebuiltToolContext) {
   const inputSchema =
     config.inputSchema ??
     (config.executionType === 'ai-agent' || config.executionType === 'image-generator' ? defaultPromptSchema : emptyObjectSchema);
@@ -99,6 +101,29 @@ export function buildTool(config: ToolConfig) {
       description: config.description,
       inputSchema: schema,
       execute: async (input: unknown, options: ToolExecutionOptions) => executeImageGenerator(config.execution, input, options),
+    });
+  }
+
+  if (config.executionType === 'prebuilt') {
+    const handler = getPrebuiltHandler(config.execution.action);
+    if (!handler) {
+      throw new Error(`Unknown prebuilt tool action: ${config.execution.action}`);
+    }
+
+    const finalSchema = config.inputSchema
+      ? schema
+      : jsonSchema(handler.inputSchema as Parameters<typeof jsonSchema>[0]);
+    const description = config.description || handler.defaultDescription;
+
+    return tool({
+      description,
+      inputSchema: finalSchema,
+      execute: async (input: unknown) => {
+        if (!runContext) {
+          throw new Error('Prebuilt tools require a run context');
+        }
+        return handler.execute(input, runContext);
+      },
     });
   }
 

@@ -61,19 +61,15 @@ export interface ThreadListAdapter {
 // Streaming message state
 // =============================================================================
 
+type StreamingPart =
+  | { type: 'reasoning'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'tool-call'; toolCallId: string; toolName: string; argsText: string; args?: Record<string, unknown>; result?: unknown; status: 'running' | 'complete' };
+
 interface StreamingMessage {
   id: string;
   entityId: string;
-  text: string;
-  reasoning: string;
-  toolCalls: Array<{
-    toolCallId: string;
-    toolName: string;
-    argsText: string;
-    args: Record<string, unknown> | undefined;
-    result?: unknown;
-    status: 'running' | 'complete';
-  }>;
+  parts: StreamingPart[];
   isStreaming: boolean;
 }
 
@@ -259,14 +255,60 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
               }
             }
             if (text || reasoning) {
+              const reconstructedParts: StreamingPart[] = [];
+              // Build ordered parts from events
+              let currentReasoning = '';
+              let currentText = '';
+              for (const ev of events) {
+                if (ev.type === 'reasoning-delta') {
+                  currentReasoning += (ev.payload?.delta as string) || '';
+                } else if (ev.type === 'text-delta') {
+                  // Flush reasoning before text
+                  if (currentReasoning) {
+                    reconstructedParts.push({ type: 'reasoning', text: currentReasoning });
+                    currentReasoning = '';
+                  }
+                  currentText += (ev.payload?.delta as string) || '';
+                } else if (ev.type === 'tool-input-available') {
+                  // Flush reasoning before tool
+                  if (currentReasoning) {
+                    reconstructedParts.push({ type: 'reasoning', text: currentReasoning });
+                    currentReasoning = '';
+                  }
+                  if (currentText) {
+                    reconstructedParts.push({ type: 'text', text: currentText });
+                    currentText = '';
+                  }
+                  reconstructedParts.push({
+                    type: 'tool-call',
+                    toolCallId: (ev.payload?.toolCallId as string) || '',
+                    toolName: (ev.payload?.toolName as string) || '',
+                    argsText: typeof ev.payload?.input === 'string' ? ev.payload.input : JSON.stringify(ev.payload?.input ?? {}),
+                    args: (typeof ev.payload?.input === 'object' && ev.payload?.input !== null ? ev.payload.input : undefined) as Record<string, unknown> | undefined,
+                    result: undefined,
+                    status: 'running',
+                  });
+                } else if (ev.type === 'tool-output-available') {
+                  const tcId = (ev.payload?.toolCallId as string) || '';
+                  for (let j = reconstructedParts.length - 1; j >= 0; j--) {
+                    const p = reconstructedParts[j];
+                    if (p.type === 'tool-call' && p.toolCallId === tcId) {
+                      reconstructedParts[j] = { ...p, result: ev.payload?.output, status: 'complete' };
+                      break;
+                    }
+                  }
+                }
+              }
+              // Flush remaining
+              if (currentReasoning) reconstructedParts.push({ type: 'reasoning', text: currentReasoning });
+              if (currentText) reconstructedParts.push({ type: 'text', text: currentText });
+
               setStreamingMessages((prev) => {
                 if (prev.some((sm) => sm.id === run.id)) return prev;
                 return [...prev, {
                   id: run.id,
                   entityId: run.agentEntityId,
-                  text,
-                  reasoning,
-                  toolCalls: [],
+                  parts: reconstructedParts,
                   isStreaming: true,
                 }];
               });
@@ -347,13 +389,17 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
           return [...prev, {
             id: runId,
             entityId,
-            text: '',
-            reasoning: '',
-            toolCalls: [],
+            parts: [],
             isStreaming: true,
           }];
         });
       });
+
+      // Helper: ensure a streaming entry exists for a run
+      const ensureEntry = (prev: StreamingMessage[], runId: string, entityId: string): StreamingMessage[] => {
+        if (prev.some((sm) => sm.id === runId)) return prev;
+        return [...prev, { id: runId, entityId, parts: [], isStreaming: true }];
+      };
 
       stream.on('text-delta', (event: StreamEvent) => {
         const runId = event.runId || (event.data.runId as string);
@@ -361,21 +407,18 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
         if (!runId || !delta) return;
 
         setStreamingMessages((prev) => {
-          const exists = prev.some((sm) => sm.id === runId);
-          if (!exists) {
-            // Missed run.created (e.g. page refresh mid-stream) — create entry on the fly
-            return [...prev, {
-              id: runId,
-              entityId: event.entityId || '',
-              text: delta,
-              reasoning: '',
-              toolCalls: [],
-              isStreaming: true,
-            }];
-          }
-          return prev.map((sm) =>
-            sm.id === runId ? { ...sm, text: sm.text + delta } : sm
-          );
+          prev = ensureEntry(prev, runId, event.entityId || '');
+          return prev.map((sm) => {
+            if (sm.id !== runId) return sm;
+            const parts = [...sm.parts];
+            const last = parts[parts.length - 1];
+            if (last?.type === 'text') {
+              parts[parts.length - 1] = { ...last, text: last.text + delta };
+            } else {
+              parts.push({ type: 'text', text: delta });
+            }
+            return { ...sm, parts };
+          });
         });
       });
 
@@ -385,20 +428,18 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
         if (!runId || !delta) return;
 
         setStreamingMessages((prev) => {
-          const exists = prev.some((sm) => sm.id === runId);
-          if (!exists) {
-            return [...prev, {
-              id: runId,
-              entityId: event.entityId || '',
-              text: '',
-              reasoning: delta,
-              toolCalls: [],
-              isStreaming: true,
-            }];
-          }
-          return prev.map((sm) =>
-            sm.id === runId ? { ...sm, reasoning: sm.reasoning + delta } : sm
-          );
+          prev = ensureEntry(prev, runId, event.entityId || '');
+          return prev.map((sm) => {
+            if (sm.id !== runId) return sm;
+            const parts = [...sm.parts];
+            const last = parts[parts.length - 1];
+            if (last?.type === 'reasoning') {
+              parts[parts.length - 1] = { ...last, text: last.text + delta };
+            } else {
+              parts.push({ type: 'reasoning', text: delta });
+            }
+            return { ...sm, parts };
+          });
         });
       });
 
@@ -406,18 +447,19 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
         const runId = event.runId || (event.data.runId as string);
         if (!runId) return;
 
-        const tc = {
+        const tc: StreamingPart & { type: 'tool-call' } = {
+          type: 'tool-call',
           toolCallId: (event.data.toolCallId as string) || '',
           toolName: (event.data.toolName as string) || '',
           argsText: typeof event.data.input === 'string' ? event.data.input : JSON.stringify(event.data.input ?? {}),
           args: (typeof event.data.input === 'object' && event.data.input !== null ? event.data.input : undefined) as Record<string, unknown> | undefined,
-          result: undefined as unknown,
-          status: 'running' as const,
+          result: undefined,
+          status: 'running',
         };
 
         setStreamingMessages((prev) =>
           prev.map((sm) =>
-            sm.id === runId ? { ...sm, toolCalls: [...sm.toolCalls, tc] } : sm
+            sm.id === runId ? { ...sm, parts: [...sm.parts, tc] } : sm
           )
         );
       });
@@ -432,10 +474,10 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
             sm.id === runId
               ? {
                   ...sm,
-                  toolCalls: sm.toolCalls.map((tc) =>
-                    tc.toolCallId === toolCallId
-                      ? { ...tc, result: event.data.output, status: 'complete' as const }
-                      : tc
+                  parts: sm.parts.map((p) =>
+                    p.type === 'tool-call' && p.toolCallId === toolCallId
+                      ? { ...p, result: event.data.output, status: 'complete' as const }
+                      : p
                   ),
                 }
               : sm
@@ -497,33 +539,26 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
       .filter((m): m is ThreadMessageLike => m !== null);
 
     const streaming = streamingMessages
-      .filter((sm) => sm.text.trim() || sm.reasoning.trim() || sm.toolCalls.length > 0)
+      .filter((sm) => sm.parts.length > 0)
       .map((sm): ThreadMessageLike => {
-        const content: ContentPart[] = [];
-
-        if (sm.reasoning) {
-          content.push({ type: 'reasoning', text: sm.reasoning });
-        }
-
-        if (sm.text) {
-          content.push({ type: 'text', text: sm.text });
-        }
-
-        for (const tc of sm.toolCalls) {
-          content.push({
-            type: 'tool-call',
-            toolCallId: tc.toolCallId,
-            toolName: tc.toolName,
-            argsText: tc.argsText,
-            args: tc.args,
-            result: tc.result,
-          });
-        }
+        const content: ContentPart[] = sm.parts.map((p): ContentPart => {
+          if (p.type === 'tool-call') {
+            return {
+              type: 'tool-call',
+              toolCallId: p.toolCallId,
+              toolName: p.toolName,
+              argsText: p.argsText,
+              args: p.args,
+              result: p.result,
+            };
+          }
+          return p;
+        });
 
         return {
           id: sm.id,
           role: 'assistant',
-          content,
+          content: mergeConsecutiveReasoning(content),
           createdAt: new Date(),
           metadata: { custom: { entityId: sm.entityId } },
         };

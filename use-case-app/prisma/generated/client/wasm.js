@@ -129,8 +129,6 @@ exports.Prisma.UserScalarFieldEnum = {
   passwordHash: 'passwordHash',
   hsafaEntityId: 'hsafaEntityId',
   hsafaSpaceId: 'hsafaSpaceId',
-  hsafaSecretKey: 'hsafaSecretKey',
-  hsafaPublicKey: 'hsafaPublicKey',
   agentEntityId: 'agentEntityId',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'

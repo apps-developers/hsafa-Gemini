@@ -170,6 +170,10 @@ export const ImageGeneratorExecutionSchema = z.object({
   includeContext: z.boolean().optional().default(false),
 });
 
+export const PrebuiltExecutionSchema = z.object({
+  action: z.string(),
+});
+
 export const ToolDisplaySchema = z.object({
   mode: z.enum(['full', 'minimal', 'hidden']).optional(),
   showInput: z.boolean().optional(),
@@ -228,6 +232,13 @@ export const ToolSchema = z.preprocess(
       executionType: z.literal('image-generator'),
       execution: ImageGeneratorExecutionSchema,
     }),
+    z.object({
+      name: z.string(),
+      description: z.string().optional(),
+      inputSchema: z.unknown().optional(),
+      executionType: z.literal('prebuilt'),
+      execution: PrebuiltExecutionSchema,
+    }),
   ]).and(
     z.object({
       display: ToolDisplaySchema.optional(),
@@ -275,5 +286,6 @@ export type AiAgentExecution = z.infer<typeof AiAgentExecutionSchema>;
 export type WaitingExecution = z.infer<typeof WaitingExecutionSchema>;
 export type ComputeExecution = z.infer<typeof ComputeExecutionSchema>;
 export type ImageGeneratorExecution = z.infer<typeof ImageGeneratorExecutionSchema>;
+export type PrebuiltExecution = z.infer<typeof PrebuiltExecutionSchema>;
 export type McpServerConfig = z.infer<typeof McpServerSchema>;
 export type McpConfig = z.infer<typeof McpConfigSchema>;

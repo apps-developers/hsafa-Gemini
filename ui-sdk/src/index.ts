@@ -9,6 +9,10 @@ export {
   ReasoningPart,
   type ReasoningPartProps,
 } from "./components/HsafaReasoning";
+export {
+  ToolCallPart,
+  type ToolCallPartProps,
+} from "./components/HsafaToolCall";
 
 // Runtime bridge
 export {

@@ -860,8 +860,6 @@ export namespace Prisma {
     passwordHash: string | null
     hsafaEntityId: string | null
     hsafaSpaceId: string | null
-    hsafaSecretKey: string | null
-    hsafaPublicKey: string | null
     agentEntityId: string | null
     createdAt: Date | null
     updatedAt: Date | null
@@ -874,8 +872,6 @@ export namespace Prisma {
     passwordHash: string | null
     hsafaEntityId: string | null
     hsafaSpaceId: string | null
-    hsafaSecretKey: string | null
-    hsafaPublicKey: string | null
     agentEntityId: string | null
     createdAt: Date | null
     updatedAt: Date | null
@@ -888,8 +884,6 @@ export namespace Prisma {
     passwordHash: number
     hsafaEntityId: number
     hsafaSpaceId: number
-    hsafaSecretKey: number
-    hsafaPublicKey: number
     agentEntityId: number
     createdAt: number
     updatedAt: number
@@ -904,8 +898,6 @@ export namespace Prisma {
     passwordHash?: true
     hsafaEntityId?: true
     hsafaSpaceId?: true
-    hsafaSecretKey?: true
-    hsafaPublicKey?: true
     agentEntityId?: true
     createdAt?: true
     updatedAt?: true
@@ -918,8 +910,6 @@ export namespace Prisma {
     passwordHash?: true
     hsafaEntityId?: true
     hsafaSpaceId?: true
-    hsafaSecretKey?: true
-    hsafaPublicKey?: true
     agentEntityId?: true
     createdAt?: true
     updatedAt?: true
@@ -932,8 +922,6 @@ export namespace Prisma {
     passwordHash?: true
     hsafaEntityId?: true
     hsafaSpaceId?: true
-    hsafaSecretKey?: true
-    hsafaPublicKey?: true
     agentEntityId?: true
     createdAt?: true
     updatedAt?: true
@@ -1019,8 +1007,6 @@ export namespace Prisma {
     passwordHash: string
     hsafaEntityId: string | null
     hsafaSpaceId: string | null
-    hsafaSecretKey: string | null
-    hsafaPublicKey: string | null
     agentEntityId: string | null
     createdAt: Date
     updatedAt: Date
@@ -1050,8 +1036,6 @@ export namespace Prisma {
     passwordHash?: boolean
     hsafaEntityId?: boolean
     hsafaSpaceId?: boolean
-    hsafaSecretKey?: boolean
-    hsafaPublicKey?: boolean
     agentEntityId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -1064,8 +1048,6 @@ export namespace Prisma {
     passwordHash?: boolean
     hsafaEntityId?: boolean
     hsafaSpaceId?: boolean
-    hsafaSecretKey?: boolean
-    hsafaPublicKey?: boolean
     agentEntityId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -1078,8 +1060,6 @@ export namespace Prisma {
     passwordHash?: boolean
     hsafaEntityId?: boolean
     hsafaSpaceId?: boolean
-    hsafaSecretKey?: boolean
-    hsafaPublicKey?: boolean
     agentEntityId?: boolean
     createdAt?: boolean
     updatedAt?: boolean
@@ -1096,8 +1076,6 @@ export namespace Prisma {
       passwordHash: string
       hsafaEntityId: string | null
       hsafaSpaceId: string | null
-      hsafaSecretKey: string | null
-      hsafaPublicKey: string | null
       agentEntityId: string | null
       createdAt: Date
       updatedAt: Date
@@ -1500,8 +1478,6 @@ export namespace Prisma {
     readonly passwordHash: FieldRef<"User", 'String'>
     readonly hsafaEntityId: FieldRef<"User", 'String'>
     readonly hsafaSpaceId: FieldRef<"User", 'String'>
-    readonly hsafaSecretKey: FieldRef<"User", 'String'>
-    readonly hsafaPublicKey: FieldRef<"User", 'String'>
     readonly agentEntityId: FieldRef<"User", 'String'>
     readonly createdAt: FieldRef<"User", 'DateTime'>
     readonly updatedAt: FieldRef<"User", 'DateTime'>
@@ -1814,8 +1790,6 @@ export namespace Prisma {
     passwordHash: 'passwordHash',
     hsafaEntityId: 'hsafaEntityId',
     hsafaSpaceId: 'hsafaSpaceId',
-    hsafaSecretKey: 'hsafaSecretKey',
-    hsafaPublicKey: 'hsafaPublicKey',
     agentEntityId: 'agentEntityId',
     createdAt: 'createdAt',
     updatedAt: 'updatedAt'
@@ -1908,8 +1882,6 @@ export namespace Prisma {
     passwordHash?: StringFilter<"User"> | string
     hsafaEntityId?: StringNullableFilter<"User"> | string | null
     hsafaSpaceId?: StringNullableFilter<"User"> | string | null
-    hsafaSecretKey?: StringNullableFilter<"User"> | string | null
-    hsafaPublicKey?: StringNullableFilter<"User"> | string | null
     agentEntityId?: StringNullableFilter<"User"> | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
     updatedAt?: DateTimeFilter<"User"> | Date | string
@@ -1922,8 +1894,6 @@ export namespace Prisma {
     passwordHash?: SortOrder
     hsafaEntityId?: SortOrderInput | SortOrder
     hsafaSpaceId?: SortOrderInput | SortOrder
-    hsafaSecretKey?: SortOrderInput | SortOrder
-    hsafaPublicKey?: SortOrderInput | SortOrder
     agentEntityId?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -1939,8 +1909,6 @@ export namespace Prisma {
     passwordHash?: StringFilter<"User"> | string
     hsafaEntityId?: StringNullableFilter<"User"> | string | null
     hsafaSpaceId?: StringNullableFilter<"User"> | string | null
-    hsafaSecretKey?: StringNullableFilter<"User"> | string | null
-    hsafaPublicKey?: StringNullableFilter<"User"> | string | null
     agentEntityId?: StringNullableFilter<"User"> | string | null
     createdAt?: DateTimeFilter<"User"> | Date | string
     updatedAt?: DateTimeFilter<"User"> | Date | string
@@ -1953,8 +1921,6 @@ export namespace Prisma {
     passwordHash?: SortOrder
     hsafaEntityId?: SortOrderInput | SortOrder
     hsafaSpaceId?: SortOrderInput | SortOrder
-    hsafaSecretKey?: SortOrderInput | SortOrder
-    hsafaPublicKey?: SortOrderInput | SortOrder
     agentEntityId?: SortOrderInput | SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -1973,8 +1939,6 @@ export namespace Prisma {
     passwordHash?: StringWithAggregatesFilter<"User"> | string
     hsafaEntityId?: StringNullableWithAggregatesFilter<"User"> | string | null
     hsafaSpaceId?: StringNullableWithAggregatesFilter<"User"> | string | null
-    hsafaSecretKey?: StringNullableWithAggregatesFilter<"User"> | string | null
-    hsafaPublicKey?: StringNullableWithAggregatesFilter<"User"> | string | null
     agentEntityId?: StringNullableWithAggregatesFilter<"User"> | string | null
     createdAt?: DateTimeWithAggregatesFilter<"User"> | Date | string
     updatedAt?: DateTimeWithAggregatesFilter<"User"> | Date | string
@@ -1987,8 +1951,6 @@ export namespace Prisma {
     passwordHash: string
     hsafaEntityId?: string | null
     hsafaSpaceId?: string | null
-    hsafaSecretKey?: string | null
-    hsafaPublicKey?: string | null
     agentEntityId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -2001,8 +1963,6 @@ export namespace Prisma {
     passwordHash: string
     hsafaEntityId?: string | null
     hsafaSpaceId?: string | null
-    hsafaSecretKey?: string | null
-    hsafaPublicKey?: string | null
     agentEntityId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -2015,8 +1975,6 @@ export namespace Prisma {
     passwordHash?: StringFieldUpdateOperationsInput | string
     hsafaEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     hsafaSpaceId?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaSecretKey?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaPublicKey?: NullableStringFieldUpdateOperationsInput | string | null
     agentEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -2029,8 +1987,6 @@ export namespace Prisma {
     passwordHash?: StringFieldUpdateOperationsInput | string
     hsafaEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     hsafaSpaceId?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaSecretKey?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaPublicKey?: NullableStringFieldUpdateOperationsInput | string | null
     agentEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -2043,8 +1999,6 @@ export namespace Prisma {
     passwordHash: string
     hsafaEntityId?: string | null
     hsafaSpaceId?: string | null
-    hsafaSecretKey?: string | null
-    hsafaPublicKey?: string | null
     agentEntityId?: string | null
     createdAt?: Date | string
     updatedAt?: Date | string
@@ -2057,8 +2011,6 @@ export namespace Prisma {
     passwordHash?: StringFieldUpdateOperationsInput | string
     hsafaEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     hsafaSpaceId?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaSecretKey?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaPublicKey?: NullableStringFieldUpdateOperationsInput | string | null
     agentEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -2071,8 +2023,6 @@ export namespace Prisma {
     passwordHash?: StringFieldUpdateOperationsInput | string
     hsafaEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     hsafaSpaceId?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaSecretKey?: NullableStringFieldUpdateOperationsInput | string | null
-    hsafaPublicKey?: NullableStringFieldUpdateOperationsInput | string | null
     agentEntityId?: NullableStringFieldUpdateOperationsInput | string | null
     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
@@ -2131,8 +2081,6 @@ export namespace Prisma {
     passwordHash?: SortOrder
     hsafaEntityId?: SortOrder
     hsafaSpaceId?: SortOrder
-    hsafaSecretKey?: SortOrder
-    hsafaPublicKey?: SortOrder
     agentEntityId?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -2145,8 +2093,6 @@ export namespace Prisma {
     passwordHash?: SortOrder
     hsafaEntityId?: SortOrder
     hsafaSpaceId?: SortOrder
-    hsafaSecretKey?: SortOrder
-    hsafaPublicKey?: SortOrder
     agentEntityId?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder
@@ -2159,8 +2105,6 @@ export namespace Prisma {
     passwordHash?: SortOrder
     hsafaEntityId?: SortOrder
     hsafaSpaceId?: SortOrder
-    hsafaSecretKey?: SortOrder
-    hsafaPublicKey?: SortOrder
     agentEntityId?: SortOrder
     createdAt?: SortOrder
     updatedAt?: SortOrder

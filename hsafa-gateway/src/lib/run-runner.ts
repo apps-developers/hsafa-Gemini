@@ -4,6 +4,7 @@ import { parse as parsePartialJson, STR, OBJ, ARR, NUM, BOOL, NULL } from 'parti
 import { prisma } from './db.js';
 import { createEmitEvent, handleRunError, type EmitEventFn } from './run-events.js';
 import { buildAgent, AgentBuildError } from '../agent-builder/builder.js';
+import { closeMCPClients } from '../agent-builder/mcp-resolver.js';
 import type { AgentConfig } from '../agent-builder/types.js';
 import { emitSmartSpaceEvent } from './smartspace-events.js';
 import { createSmartSpaceMessage } from './smartspace-db.js';
@@ -91,7 +92,15 @@ export async function executeRun(runId: string): Promise<void> {
 
     const config = agent.configJson as unknown as AgentConfig;
 
-    const built = await buildAgent({ config });
+    const built = await buildAgent({
+      config,
+      runContext: {
+        runId,
+        agentEntityId: run.agentEntityId,
+        smartSpaceId: run.smartSpaceId,
+        agentId: run.agentId,
+      },
+    });
 
     // Load messages WITH entity info so we can tag sender identity
     const messages = await prisma.smartSpaceMessage.findMany({
@@ -191,9 +200,25 @@ export async function executeRun(runId: string): Promise<void> {
     const messageId = `msg-${runId}-${Date.now()}`;
     let textId: string | null = null;
     let reasoningId: string | null = null;
-    let accumulatedReasoning = ''; // Manual accumulator — fallback for streamResult.reasoningText
+    let currentReasoningText = ''; // Current reasoning block accumulator
+    let currentTextContent = '';   // Current text block accumulator
     const toolArgsAccumulator = new Map<string, string>(); // toolCallId -> accumulated args text
-    const toolParts: Array<{ type: string; [key: string]: unknown }> = [];
+    const orderedParts: Array<{ type: string; [key: string]: unknown }> = [];
+
+    // Flush current reasoning block into orderedParts
+    const flushReasoning = () => {
+      if (currentReasoningText) {
+        orderedParts.push({ type: 'reasoning', text: currentReasoningText });
+        currentReasoningText = '';
+      }
+    };
+    // Flush current text block into orderedParts
+    const flushText = () => {
+      if (currentTextContent) {
+        orderedParts.push({ type: 'text', text: currentTextContent });
+        currentTextContent = '';
+      }
+    };
 
     await emitEvent('start', { messageId });
 
@@ -201,42 +226,49 @@ export async function executeRun(runId: string): Promise<void> {
     for await (const part of streamResult.fullStream) {
       const t = part.type as string;
 
-      // Text streaming
+      // Text streaming (AI SDK v6: text-delta has .text)
       if (t === 'text-delta') {
-        const delta = (part as any).textDelta || (part as any).text || '';
+        const delta = (part as any).text || (part as any).textDelta || '';
         if (!delta) continue;
         if (!textId) {
           textId = `text-${messageId}-${Date.now()}`;
           await emitEvent('text-start', { id: textId });
         }
+        currentTextContent += delta;
         await emitEvent('text-delta', { id: textId, delta });
       }
-      // Reasoning streaming (AI SDK v6 uses 'reasoning-delta' in fullStream)
+      else if (t === 'text-end') {
+        if (textId) { await emitEvent('text-end', { id: textId }); textId = null; }
+        flushText();
+      }
+      // Reasoning streaming (AI SDK v6: reasoning-delta has .text)
       else if (t === 'reasoning' || t === 'reasoning-delta') {
-        const delta = (part as any).textDelta || (part as any).text || (part as any).delta || '';
+        const delta = (part as any).text || (part as any).textDelta || (part as any).delta || '';
         if (!delta) continue;
         if (!reasoningId) {
           reasoningId = `reasoning-${messageId}-${Date.now()}`;
           await emitEvent('reasoning-start', { id: reasoningId });
         }
-        accumulatedReasoning += delta;
+        currentReasoningText += delta;
         await emitEvent('reasoning-delta', { id: reasoningId, delta });
       }
-      // Tool call streaming start
-      else if (t === 'tool-call-streaming-start') {
-        const { toolCallId, toolName } = part as any;
-        toolArgsAccumulator.set(toolCallId, '');
-        await emitEvent('tool-input-start', { toolCallId, toolName });
+      else if (t === 'reasoning-end') {
+        if (reasoningId) { await emitEvent('reasoning-end', { id: reasoningId }); reasoningId = null; }
+        flushReasoning();
       }
-      // Tool call args delta (streaming structured JSON partials)
-      else if (t === 'tool-call-delta') {
-        const { toolCallId, argsTextDelta } = part as any;
-        if (argsTextDelta) {
-          const accumulated = (toolArgsAccumulator.get(toolCallId) || '') + argsTextDelta;
-          toolArgsAccumulator.set(toolCallId, accumulated);
+      // Tool input streaming start (AI SDK v6: tool-input-start with .id, .toolName)
+      else if (t === 'tool-input-start') {
+        const { id, toolName } = part as any;
+        toolArgsAccumulator.set(id, '');
+        await emitEvent('tool-input-start', { toolCallId: id, toolName });
+      }
+      // Tool input args delta (AI SDK v6: tool-input-delta with .id, .delta)
+      else if (t === 'tool-input-delta') {
+        const { id, delta: argsDelta } = part as any;
+        if (argsDelta) {
+          const accumulated = (toolArgsAccumulator.get(id) || '') + argsDelta;
+          toolArgsAccumulator.set(id, accumulated);
           
-          // Parse partial JSON using partial-json library
-          // This gives us valid partial objects even from incomplete JSON
           let partialInput: unknown = null;
           try {
             partialInput = parsePartialJson(accumulated, PARTIAL_JSON_ALLOW);
@@ -244,39 +276,50 @@ export async function executeRun(runId: string): Promise<void> {
             // Malformed JSON - emit null for partialInput
           }
           
-          // Emit structured partial - clients always get valid partial JSON
           await emitEvent('tool-input-delta', {
-            toolCallId,
-            delta: argsTextDelta,        // raw text delta
-            accumulated,                  // raw accumulated text
-            partialInput,                 // VALID partial JSON object
+            toolCallId: id,
+            delta: argsDelta,
+            accumulated,
+            partialInput,
           });
         }
       }
-      // Tool call complete - full input available
+      // Tool input end
+      else if (t === 'tool-input-end') {
+        // No action needed, tool-call follows
+      }
+      // Tool call complete (AI SDK v6: .input instead of .args)
       else if (t === 'tool-call') {
-        const { toolCallId, toolName, args } = part as any;
+        const { toolCallId, toolName, input } = part as any;
         
-        // Close text/reasoning blocks if open
+        // Close & flush text/reasoning blocks if open (preserves order)
         if (textId) { await emitEvent('text-end', { id: textId }); textId = null; }
+        flushText();
         if (reasoningId) { await emitEvent('reasoning-end', { id: reasoningId }); reasoningId = null; }
+        flushReasoning();
         
-        // Emit full structured input - clients can execute this tool
-        await emitEvent('tool-input-available', { toolCallId, toolName, input: args });
+        await emitEvent('tool-input-available', { toolCallId, toolName, input });
         
-        // Track for final message
-        toolParts.push({ type: 'tool-call', toolCallId, toolName, args });
+        orderedParts.push({ type: 'tool-call', toolCallId, toolName, args: input });
       }
-      // Tool result - output available
+      // Tool result (AI SDK v6: .output instead of .result)
       else if (t === 'tool-result') {
-        const { toolCallId, toolName, result } = part as any;
-        await emitEvent('tool-output-available', { toolCallId, toolName, output: result });
-        toolParts.push({ type: 'tool-result', toolCallId, toolName, result });
+        const { toolCallId, toolName, output } = part as any;
+        await emitEvent('tool-output-available', { toolCallId, toolName, output });
+        orderedParts.push({ type: 'tool-result', toolCallId, toolName, result: output });
       }
-      // Stream finish
+      // Tool error
+      else if (t === 'tool-error') {
+        const { toolCallId, toolName, error } = part as any;
+        console.error(`[Run ${runId}] Tool error: ${toolName}`, error);
+        await emitEvent('tool-error', { toolCallId, toolName, error: error instanceof Error ? error.message : String(error) });
+      }
+      // Stream finish — flush any remaining open blocks
       else if (t === 'finish') {
-        if (textId) await emitEvent('text-end', { id: textId });
-        if (reasoningId) await emitEvent('reasoning-end', { id: reasoningId });
+        if (textId) { await emitEvent('text-end', { id: textId }); textId = null; }
+        flushText();
+        if (reasoningId) { await emitEvent('reasoning-end', { id: reasoningId }); reasoningId = null; }
+        flushReasoning();
       }
       // Error
       else if (t === 'error') {
@@ -289,20 +332,18 @@ export async function executeRun(runId: string): Promise<void> {
       }
     }
 
-    // Use AI SDK's built-in accumulation + manual fallback for reasoning
-    const finalText = await streamResult.text;
-    const finalReasoningText = (await streamResult.reasoningText) || accumulatedReasoning || undefined;
+    // Clean up MCP clients after streaming completes
+    if (built.mcpClients.length > 0) {
+      await closeMCPClients(built.mcpClients);
+    }
 
-    // Build final message using SDK values + tool parts
-    const finalParts: Array<{ type: string; [key: string]: unknown }> = [];
-    if (finalReasoningText) {
-      finalParts.push({ type: 'reasoning', text: finalReasoningText });
-    }
-    if (finalText) {
-      finalParts.push({ type: 'text', text: finalText });
-    }
-    // Add tool calls and results to message parts
-    finalParts.push(...toolParts);
+    // Flush any remaining blocks that weren't closed by a finish event
+    flushReasoning();
+    flushText();
+
+    // orderedParts now contains all parts in correct streaming order
+    const finalParts = orderedParts;
+    const finalText = finalParts.find(p => p.type === 'text')?.text as string | undefined;
 
     await prisma.run.update({
       where: { id: runId },
