@@ -35,18 +35,33 @@ let cachedAgentEntityId: string | null = null;
 async function ensureAgent(client: HsafaClient): Promise<string> {
   if (cachedAgentEntityId) return cachedAgentEntityId;
 
-  const { agentId } = await client.agents.create({
-    name: "hsafa-assistant",
-    config: AGENT_CONFIG,
-  });
+  try {
+    // Try to create the agent + entity
+    const { agentId } = await client.agents.create({
+      name: "hsafa-assistant",
+      config: AGENT_CONFIG,
+    });
 
-  const { entity: agentEntity } = await client.entities.createAgent({
-    agentId,
-    displayName: "Hsafa Assistant",
-  });
+    const { entity: agentEntity } = await client.entities.createAgent({
+      agentId,
+      displayName: "Hsafa Assistant",
+    });
 
-  cachedAgentEntityId = agentEntity.id;
-  return agentEntity.id;
+    cachedAgentEntityId = agentEntity.id;
+    return agentEntity.id;
+  } catch {
+    // Agent likely already exists (e.g., server restart) — look it up
+    const { agents } = await client.agents.list();
+    const existing = agents.find((a: any) => a.name === "hsafa-assistant");
+    if (!existing) throw new Error("Failed to create or find hsafa-assistant agent");
+
+    const { entities } = await client.entities.list({ type: "agent" });
+    const agentEntity = entities.find((e: any) => e.agentId === existing.id);
+    if (!agentEntity) throw new Error("Agent exists but has no entity");
+
+    cachedAgentEntityId = agentEntity.id;
+    return agentEntity.id;
+  }
 }
 
 export async function POST(request: Request) {

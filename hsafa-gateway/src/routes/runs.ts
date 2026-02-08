@@ -10,6 +10,51 @@ import { requireAuth, requireSecretKey } from '../middleware/auth.js';
 
 export const runsRouter: ExpressRouter = Router();
 
+/**
+ * For public_key_jwt auth, verify the authenticated entity is a member
+ * of the run's SmartSpace. Secret key auth skips this check (full access).
+ * Returns the run if access is granted, or sends an error response and returns null.
+ */
+async function verifyRunMembership(
+  req: Request,
+  res: Response,
+  runId: string
+): Promise<{ id: string; smartSpaceId: string; agentEntityId: string; agentId: string } | null> {
+  const run = await prisma.run.findUnique({
+    where: { id: runId },
+    select: { id: true, smartSpaceId: true, agentEntityId: true, agentId: true },
+  });
+
+  if (!run) {
+    res.status(404).json({ error: 'Run not found' });
+    return null;
+  }
+
+  // Secret key = full access
+  if (req.auth?.method === 'secret_key') {
+    return run;
+  }
+
+  // Public key + JWT = verify membership
+  const entityId = req.auth?.entityId;
+  if (!entityId) {
+    res.status(403).json({ error: 'No entity resolved from JWT' });
+    return null;
+  }
+
+  const membership = await prisma.smartSpaceMembership.findUnique({
+    where: { smartSpaceId_entityId: { smartSpaceId: run.smartSpaceId, entityId } },
+    select: { id: true },
+  });
+
+  if (!membership) {
+    res.status(403).json({ error: 'Not a member of this run\'s SmartSpace' });
+    return null;
+  }
+
+  return run;
+}
+
 // GET /api/runs - List runs (debugging/history)
 runsRouter.get('/', requireSecretKey(), async (req: Request, res: Response) => {
   try {
@@ -140,6 +185,11 @@ runsRouter.post('/:runId/cancel', requireSecretKey(), async (req: Request, res: 
 
 runsRouter.get('/:runId/stream', requireAuth(), async (req: Request, res: Response) => {
   const { runId } = req.params;
+
+  // Verify membership before starting SSE stream
+  const run = await verifyRunMembership(req, res, runId);
+  if (!run) return;
+
   const since = req.query.since as string | undefined;
   const lastEventId = req.headers['last-event-id'] as string | undefined;
 
@@ -159,15 +209,6 @@ runsRouter.get('/:runId/stream', requireAuth(), async (req: Request, res: Respon
   });
 
   try {
-    const run = await prisma.run.findUnique({
-      where: { id: runId },
-    });
-
-    if (!run) {
-      res.write(`event: error\ndata: ${JSON.stringify({ error: 'Run not found' })}\n\n`);
-      res.end();
-      return;
-    }
 
     res.write(`: Connected to run ${runId}\n\n`);
 
@@ -251,6 +292,10 @@ runsRouter.get('/:runId/events', requireAuth(), async (req: Request, res: Respon
   try {
     const { runId } = req.params;
 
+    // Verify membership
+    const run = await verifyRunMembership(req, res, runId);
+    if (!run) return;
+
     const events = await prisma.runEvent.findMany({
       where: { runId },
       orderBy: { seq: 'asc' },
@@ -275,6 +320,10 @@ runsRouter.get('/:runId/events', requireAuth(), async (req: Request, res: Respon
 runsRouter.get('/:runId', requireAuth(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
+
+    // Verify membership
+    const verified = await verifyRunMembership(req, res, runId);
+    if (!verified) return;
 
     const run = await prisma.run.findUnique({
       where: { id: runId },
@@ -333,6 +382,11 @@ runsRouter.delete('/:runId', requireSecretKey(), async (req: Request, res: Respo
 runsRouter.post('/:runId/tool-results', requireAuth(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
+
+    // Verify membership
+    const run = await verifyRunMembership(req, res, runId);
+    if (!run) return;
+
     const { callId, result, source, clientId } = req.body;
 
     if (!callId || typeof callId !== 'string') {

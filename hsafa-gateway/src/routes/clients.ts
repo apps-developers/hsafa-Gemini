@@ -7,7 +7,13 @@ export const clientsRouter: ExpressRouter = Router();
 
 clientsRouter.post('/register', requireAuth(), async (req, res) => {
   try {
-    const { entityId, clientKey, clientType, displayName, capabilities } = req.body;
+    const { entityId: bodyEntityId, clientKey, clientType, displayName, capabilities } = req.body;
+
+    // For JWT auth: force entityId to the JWT-resolved entity (prevent impersonation)
+    // For secret key auth: use entityId from body
+    const entityId = req.auth?.method === 'public_key_jwt'
+      ? req.auth.entityId
+      : bodyEntityId;
 
     if (!entityId || typeof entityId !== 'string') {
       return res.status(400).json({ error: 'Missing required field: entityId' });
