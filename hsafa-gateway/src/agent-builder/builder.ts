@@ -1,9 +1,9 @@
-import { ToolLoopAgent, stepCountIs } from 'ai';
+import { ToolLoopAgent, stepCountIs, jsonSchema, tool } from 'ai';
 import { validateAgentConfig, interpolateConfigEnvVars } from './parser';
 import { resolveModel, getModelSettings } from './model-resolver';
 import { resolveTools } from './tool-resolver';
 import { resolveMCPClients, loadMCPTools, closeMCPClients, type MCPClientWrapper } from './mcp-resolver';
-import { initPrebuiltTools } from './prebuilt-tools/registry';
+import { initPrebuiltTools, getAllPrebuiltHandlers } from './prebuilt-tools/registry';
 import type { AgentConfig } from './types';
 
 export interface PrebuiltToolContext {
@@ -52,15 +52,35 @@ export async function buildAgent(options: BuildAgentOptions): Promise<BuildAgent
     // Ensure prebuilt tool handlers are registered
     await initPrebuiltTools();
 
+    // Filter out any prebuilt entries from config (they're auto-injected below)
+    const configTools = (validatedConfig.tools ?? []).filter(
+      (t: any) => t.executionType !== 'prebuilt'
+    );
+
     // Resolve static tools from agent config
-    const staticTools = resolveTools(validatedConfig.tools ?? [], options.runContext);
+    const staticTools = resolveTools(configTools, options.runContext);
+
+    // Auto-inject ALL prebuilt tools
+    const prebuiltTools: Record<string, any> = {};
+    for (const [action, handler] of getAllPrebuiltHandlers()) {
+      prebuiltTools[action] = tool({
+        description: handler.defaultDescription,
+        inputSchema: jsonSchema(handler.inputSchema as Parameters<typeof jsonSchema>[0]),
+        execute: async (input: unknown) => {
+          if (!options.runContext) {
+            throw new Error('Prebuilt tools require a run context');
+          }
+          return handler.execute(input, options.runContext);
+        },
+      });
+    }
 
     // Resolve MCP tools
     const mcpClients = await resolveMCPClients(validatedConfig.mcp);
     const mcpTools = await loadMCPTools(mcpClients, validatedConfig.mcp);
 
-    // Merge all tools
-    const allTools: Record<string, any> = { ...staticTools, ...mcpTools };
+    // Merge all tools (prebuilt first, then config, then MCP)
+    const allTools: Record<string, any> = { ...prebuiltTools, ...staticTools, ...mcpTools };
 
     const agent = new ToolLoopAgent({
       model,

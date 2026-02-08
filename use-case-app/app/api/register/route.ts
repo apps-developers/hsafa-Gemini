@@ -16,12 +16,18 @@ const AGENT_CONFIG = {
   },
   model: {
     provider: "openai",
-    name: "gpt-4o-mini",
-    temperature: 0.7,
-    maxOutputTokens: 800,
+    name: "gpt-5",
+    api: "responses",
+    maxOutputTokens: 16000,
+    reasoning: {
+      enabled: true,
+      effort: "medium",
+      summary: "auto",
+    },
   },
   loop: {
-    maxSteps: 5,
+    maxSteps: 10,
+    toolChoice: "auto",
   },
   runtime: {
     response: {

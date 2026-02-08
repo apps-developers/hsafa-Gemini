@@ -19,10 +19,15 @@ export async function initPrebuiltTools(): Promise<void> {
   _initPromise = (async () => {
     await import('./set-goals.js');
     await import('./get-goals.js');
+    await import('./delete-goals.js');
   })();
   return _initPromise;
 }
 
 export function getPrebuiltHandler(action: string): PrebuiltToolHandler | undefined {
   return registry.get(action);
+}
+
+export function getAllPrebuiltHandlers(): Map<string, PrebuiltToolHandler> {
+  return registry;
 }

@@ -13,11 +13,11 @@ interface GoalInput {
 interface SetGoalsInput {
   goals: GoalInput[];
   clearExisting?: boolean;
-  deleteGoalIds?: string[];
 }
 
 registerPrebuiltTool('setGoals', {
-  defaultDescription: 'Set or update your goals. Use this to track objectives, priorities, and progress. You can create new goals, update existing ones, delete specific goals by ID, or clear all goals and start fresh.',
+  defaultDescription: 'Set or update goals. Use this to create new goals or update existing ones. You can also clear all goals and start fresh.',
+
 
   inputSchema: {
     type: 'object',
@@ -56,17 +56,12 @@ registerPrebuiltTool('setGoals', {
         type: 'boolean',
         description: 'If true, remove all existing goals before setting new ones. Default: false.',
       },
-      deleteGoalIds: {
-        type: 'array',
-        description: 'IDs of specific goals to delete.',
-        items: { type: 'string' },
-      },
     },
     required: ['goals'],
   },
 
   async execute(input: unknown, context: PrebuiltToolContext) {
-    const { goals, clearExisting, deleteGoalIds } = input as SetGoalsInput;
+    const { goals, clearExisting } = input as SetGoalsInput;
     const { agentEntityId } = context;
 
     if (clearExisting) {
@@ -76,18 +71,6 @@ registerPrebuiltTool('setGoals', {
     }
 
     const results: Array<{ action: string; id: string; description: string }> = [];
-
-    if (deleteGoalIds && deleteGoalIds.length > 0) {
-      const toDelete = await prisma.goal.findMany({
-        where: { id: { in: deleteGoalIds }, entityId: agentEntityId },
-      });
-      await prisma.goal.deleteMany({
-        where: { id: { in: deleteGoalIds }, entityId: agentEntityId },
-      });
-      for (const g of toDelete) {
-        results.push({ action: 'deleted', id: g.id, description: g.description });
-      }
-    }
 
     for (const goal of goals) {
       if (goal.id) {

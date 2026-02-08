@@ -69,24 +69,20 @@ export function toAiSdkUiMessages(rawUiMessages: Array<{ id?: string; role?: str
         const input = 'input' in p ? (p as any).input : 'args' in p ? (p as any).args : {};
         const output = toolResultsById.get(p.toolCallId);
 
-        if (output !== undefined) {
-          partsOut.push({
-            type: 'dynamic-tool',
-            toolName: p.toolName,
-            toolCallId: p.toolCallId,
-            state: 'output-available',
-            input,
-            output,
-          });
-        } else {
-          partsOut.push({
-            type: 'dynamic-tool',
-            toolName: p.toolName,
-            toolCallId: p.toolCallId,
-            state: 'input-available',
-            input,
-          });
-        }
+        // Always provide output — orphaned tool calls (no result) get a synthetic error
+        // to prevent OpenAI "No tool output found" errors on conversation replay
+        const resolvedOutput = output !== undefined
+          ? output
+          : { error: 'Tool execution result was not recorded.' };
+
+        partsOut.push({
+          type: 'dynamic-tool',
+          toolName: p.toolName,
+          toolCallId: p.toolCallId,
+          state: 'output-available',
+          input,
+          output: resolvedOutput,
+        });
 
         continue;
       }
