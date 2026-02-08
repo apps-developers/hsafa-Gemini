@@ -169,6 +169,9 @@ importers:
       '@assistant-ui/react':
         specifier: '>=0.7.0'
         version: 0.10.50(@types/react-dom@19.2.3(@types/react@19.2.8))(@types/react@19.2.8)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3))
+      partial-json:
+        specifier: ^0.1.7
+        version: 0.1.7
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -181,13 +184,6 @@ importers:
         version: 5.9.3
 
   ui-sdk:
-    dependencies:
-      clsx:
-        specifier: ^2.1.1
-        version: 2.1.1
-      tailwind-merge:
-        specifier: ^3.4.0
-        version: 3.4.0
     devDependencies:
       '@assistant-ui/react':
         specifier: ^0.10.25

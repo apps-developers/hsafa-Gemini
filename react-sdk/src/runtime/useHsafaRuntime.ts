@@ -10,6 +10,7 @@ import type {
   Membership,
   Entity,
 } from '../types.js';
+import { parse as parsePartialJson } from 'partial-json';
 
 // =============================================================================
 // Types for assistant-ui integration
@@ -443,25 +444,104 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
         });
       });
 
-      stream.on('tool-input-available', (event: StreamEvent) => {
+      stream.on('tool-input-start', (event: StreamEvent) => {
         const runId = event.runId || (event.data.runId as string);
         if (!runId) return;
+        const toolCallId = (event.data.toolCallId as string) || '';
+        const toolName = (event.data.toolName as string) || '';
 
         const tc: StreamingPart & { type: 'tool-call' } = {
           type: 'tool-call',
-          toolCallId: (event.data.toolCallId as string) || '',
-          toolName: (event.data.toolName as string) || '',
-          argsText: typeof event.data.input === 'string' ? event.data.input : JSON.stringify(event.data.input ?? {}),
-          args: (typeof event.data.input === 'object' && event.data.input !== null ? event.data.input : undefined) as Record<string, unknown> | undefined,
+          toolCallId,
+          toolName,
+          argsText: '',
+          args: undefined as Record<string, unknown> | undefined,
           result: undefined,
           status: 'running',
         };
 
-        setStreamingMessages((prev) =>
-          prev.map((sm) =>
+        setStreamingMessages((prev) => {
+          prev = ensureEntry(prev, runId, event.entityId || '');
+          return prev.map((sm) =>
             sm.id === runId ? { ...sm, parts: [...sm.parts, tc] } : sm
-          )
+          );
+        });
+      });
+
+      stream.on('tool-input-delta', (event: StreamEvent) => {
+        const runId = event.runId || (event.data.runId as string);
+        const toolCallId = (event.data.toolCallId as string) || '';
+        const delta = (event.data.delta as string) || '';
+        if (!runId || !toolCallId || !delta) return;
+
+        setStreamingMessages((prev) =>
+          prev.map((sm) => {
+            if (sm.id !== runId) return sm;
+            return {
+              ...sm,
+              parts: sm.parts.map((p) => {
+                if (p.type !== 'tool-call' || p.toolCallId !== toolCallId) return p;
+                // Accumulate raw text from deltas
+                const rawAccumulated = (event.data.accumulated as string) || ((p.argsText || '') + delta);
+                // Parse partial JSON locally for structured display
+                let parsedArgs: Record<string, unknown> | undefined;
+                try {
+                  const parsed = parsePartialJson(rawAccumulated);
+                  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    parsedArgs = parsed as Record<string, unknown>;
+                  }
+                } catch {
+                  // Not parseable yet — keep previous args
+                  parsedArgs = p.args;
+                }
+                const displayText = parsedArgs
+                  ? JSON.stringify(parsedArgs, null, 2)
+                  : rawAccumulated;
+                return { ...p, argsText: displayText, args: parsedArgs };
+              }),
+            };
+          })
         );
+      });
+
+      stream.on('tool-input-available', (event: StreamEvent) => {
+        const runId = event.runId || (event.data.runId as string);
+        if (!runId) return;
+        const toolCallId = (event.data.toolCallId as string) || '';
+        const toolName = (event.data.toolName as string) || '';
+        const argsText = typeof event.data.input === 'string' ? event.data.input : JSON.stringify(event.data.input ?? {});
+        const args = (typeof event.data.input === 'object' && event.data.input !== null ? event.data.input : undefined) as Record<string, unknown> | undefined;
+
+        setStreamingMessages((prev) => {
+          prev = ensureEntry(prev, runId, event.entityId || '');
+          return prev.map((sm) => {
+            if (sm.id !== runId) return sm;
+            // Update existing streaming part, or push new one
+            const existing = sm.parts.some((p) => p.type === 'tool-call' && p.toolCallId === toolCallId);
+            if (existing) {
+              return {
+                ...sm,
+                parts: sm.parts.map((p) =>
+                  p.type === 'tool-call' && p.toolCallId === toolCallId
+                    ? { ...p, argsText, args, status: 'running' as const }
+                    : p
+                ),
+              };
+            }
+            return {
+              ...sm,
+              parts: [...sm.parts, {
+                type: 'tool-call' as const,
+                toolCallId,
+                toolName,
+                argsText,
+                args,
+                result: undefined,
+                status: 'running' as const,
+              }],
+            };
+          });
+        });
       });
 
       stream.on('tool-output-available', (event: StreamEvent) => {
@@ -539,7 +619,6 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
       .filter((m): m is ThreadMessageLike => m !== null);
 
     const streaming = streamingMessages
-      .filter((sm) => sm.parts.length > 0)
       .map((sm): ThreadMessageLike => {
         const content: ContentPart[] = sm.parts.map((p): ContentPart => {
           if (p.type === 'tool-call') {

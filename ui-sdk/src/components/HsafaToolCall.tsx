@@ -71,7 +71,7 @@ export const ToolCallPart: FC<ToolCallPartProps> = (props) => {
   const hasContent =
     (resolvedInput != null && resolvedInput !== "" && resolvedInput !== "{}") ||
     resolvedOutput != null;
-  const isExpandable = hasContent && !isRunning;
+  const isExpandable = hasContent;
 
   const [open, setOpen] = useState(false);
 
@@ -124,11 +124,14 @@ export const ToolCallPart: FC<ToolCallPartProps> = (props) => {
         {/* Shimmer bar while running */}
         {isRunning && <span className="hsafa-tool__shimmer" />}
 
-        {/* Chevron — only when expandable */}
+        {/* Chevron — shown when expandable */}
         {isExpandable && (
           <svg
             className="hsafa-tool__chevron"
-            style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}
+            style={{
+              transform: open ? "rotate(90deg)" : "rotate(0deg)",
+              marginLeft: isRunning ? undefined : "auto",
+            }}
             width="12"
             height="12"
             viewBox="0 0 24 24"
