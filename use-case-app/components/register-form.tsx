@@ -16,8 +16,6 @@ export interface AuthUser {
   name: string;
   entityId: string;
   smartSpaceId: string;
-  secretKey: string;
-  publicKey: string;
   agentEntityId: string;
 }
 

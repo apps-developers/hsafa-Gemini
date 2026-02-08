@@ -6,16 +6,25 @@ This document describes how clients authenticate and subscribe to SmartSpaces in
 
 ## Key Types
 
-| Key | Purpose | Who Uses It |
-|-----|---------|-------------|
-| **Public Key** (`pk_...`) | Identifies SmartSpace, grants read access | All clients |
-| **Secret Key** (`sk_...`) | Admin access, full control | Your backend, Node.js services |
+Hsafa uses **2 system-wide keys** (environment variables), not per-SmartSpace keys:
+
+| Key | Header | Purpose | Who Uses It | Safe to Expose? |
+|-----|--------|---------|-------------|----------------|
+| **Secret Key** (`sk_...`) | `x-secret-key` | Full access to all gateway operations | Your backend, Node.js services, CLI | **No** — server-side only |
+| **Public Key** (`pk_...`) | `x-public-key` | Limited access (send messages, read streams, submit tool results) | React/browser/mobile clients | **Yes** — safe in client-side code |
+
+Both keys are configured as environment variables on the gateway:
+
+```env
+HSAFA_SECRET_KEY=sk_...
+HSAFA_PUBLIC_KEY=pk_...
+```
 
 ---
 
 ## Authentication by Client Type
 
-### React (Human Users)
+### React / Browser (Human Users) — Public Key + JWT
 
 Human users authenticate via JWT from your existing auth system (Clerk, Auth0, NextAuth, etc.).
 
@@ -29,8 +38,8 @@ function App({ spaceId }) {
   return (
     <HsafaProvider
       gatewayUrl="http://localhost:3001"
-      publicKey="pk_..."
-      jwt={token}
+      publicKey="pk_..."  // system-wide public key, safe for browser
+      jwt={token}          // user's JWT from auth provider
     >
       <Chat spaceId={spaceId} />
     </HsafaProvider>
@@ -44,34 +53,59 @@ function Chat({ spaceId }) {
 }
 ```
 
-**How JWT works:**
+**How Public Key + JWT works:**
 
 1. User logs in via your auth system → gets JWT
 2. JWT contains user identifier (e.g., `sub: "clerk_user_123"`)
-3. Client passes JWT to Hsafa SDK
-4. Gateway verifies JWT signature
-5. Gateway looks up entity by `externalId` matching JWT claim
-6. Gateway checks entity is member of the SmartSpace
-7. If all valid → allow action
+3. Client passes public key + JWT to Hsafa SDK
+4. Gateway validates the public key matches `HSAFA_PUBLIC_KEY` env var
+5. Gateway verifies JWT signature (via shared secret or JWKS URL)
+6. Gateway looks up entity by `externalId` matching JWT claim
+7. Gateway checks entity is member of the SmartSpace
+8. If all valid → allow action (send message, read stream, submit tool result)
 
-### Node.js (System Entities / Services)
+**What public key auth CAN do:**
+- Send messages (entityId auto-resolved from JWT)
+- Subscribe to SmartSpace streams
+- Read message history
+- Submit tool results
+- List spaces the user is a member of
 
-System entities authenticate via secret key.
+**What public key auth CANNOT do:**
+- Create/delete SmartSpaces
+- Create/delete entities or agents
+- Manage memberships
+- Create/cancel runs
+- Access entity stream (subscribeAll)
+
+### Node.js (Backends / Services) — Secret Key
+
+System entities and backends authenticate via the secret key.
 
 ```ts
 import { HsafaClient } from '@hsafa/node';
 
+// Full access — backends, services, CLI
 const client = new HsafaClient({
   gatewayUrl: 'http://localhost:3001',
   secretKey: 'sk_...',
 });
+
+// Optionally pass JWT to identify who sent a message
+const clientWithJwt = new HsafaClient({
+  gatewayUrl: 'http://localhost:3001',
+  secretKey: 'sk_...',
+  jwt: userToken,  // optional: resolves entityId from JWT instead of body
+});
 ```
+
+**What secret key auth CAN do:** Everything — full admin access to all gateway operations.
 
 ---
 
 ## Service Subscription (Single Entity Stream)
 
-For Node.js services that need to listen to multiple SmartSpaces, use a **single entity stream** instead of multiple connections.
+For Node.js services that need to listen to multiple SmartSpaces, use a **single entity stream** instead of multiple connections. **Requires secret key auth.**
 
 ### How It Works
 
@@ -99,7 +133,7 @@ import { HsafaClient } from '@hsafa/node';
 
 const client = new HsafaClient({
   gatewayUrl: 'http://localhost:3001',
-  secretKey: 'sk_...',
+  secretKey: 'sk_...',  // system-wide secret key
 });
 
 const SERVICE_ENTITY_ID = 'order-processor-entity-id';
@@ -138,13 +172,14 @@ stream.on('tool-input-available', async (event) => {
 
 ## Entity Management Flow
 
-Entities must be created and added to spaces **before** they can interact.
+Entities must be created and added to spaces **before** they can interact. All management operations require the **secret key**.
 
 ### Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     YOUR APP (Backend)                          │
+│                     (uses secret key)                           │
 │                                                                 │
 │  1. User signs up → Create entity in Gateway                    │
 │  2. User joins workspace → Add entity to SmartSpace             │
@@ -155,9 +190,10 @@ Entities must be created and added to spaces **before** they can interact.
 ┌─────────────────────────────────────────────────────────────────┐
 │                     HSAFA GATEWAY                               │
 │                                                                 │
+│  - Validates secret key (system-wide env var)                   │
 │  - Stores entities with externalId (links to your auth)         │
 │  - Stores memberships (which entities are in which spaces)      │
-│  - JWT validates identity                                       │
+│  - JWT validates human identity (with public key)               │
 │  - Checks membership before allowing actions                    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -170,7 +206,7 @@ import { HsafaClient } from '@hsafa/node';
 
 const client = new HsafaClient({
   gatewayUrl: 'http://localhost:3001',
-  secretKey: 'sk_...',
+  secretKey: process.env.HSAFA_SECRET_KEY,  // system-wide secret key
 });
 
 // When user signs up in your app
@@ -213,9 +249,21 @@ async function createServiceEntity() {
 
 ## Gateway Configuration
 
+### System-Wide Keys
+
+Set both keys as environment variables on the gateway:
+
+```env
+# System-wide authentication keys
+HSAFA_SECRET_KEY=sk_...   # Full access — never expose to clients
+HSAFA_PUBLIC_KEY=pk_...   # Limited access — safe for browser/mobile
+```
+
+You can generate keys using the gateway's key utility, or use any secure random string with the appropriate prefix.
+
 ### JWT Verification
 
-Configure how Gateway verifies JWTs:
+Configure how Gateway verifies JWTs (used with public key auth):
 
 ```env
 # Option A: Shared secret (simple)
@@ -239,10 +287,29 @@ JWT_ENTITY_CLAIM=sub
 
 ---
 
+## Security Model
+
+### Defense in Depth (3 layers)
+
+1. **Key validation** — Secret key or public key must be valid
+2. **JWT verification** — For public key auth, JWT must be valid and signed correctly
+3. **Membership check** — Entity must be a member of the SmartSpace they're accessing
+
+### Key Principles
+
+- The browser **never** sees the secret key
+- The public key is useless without a valid JWT
+- JWT users cannot impersonate other entities — `entityId` is resolved from the JWT token
+- Membership is enforced on all space-scoped operations
+- Both keys are system-wide — no per-space key management needed
+
+---
+
 ## Summary
 
 | Client Type | Authentication | Subscription |
-|-------------|----------------|--------------|
+|-------------|----------------|---------------|
 | **React (human)** | `publicKey` + `jwt` | Per-space via SDK hooks |
 | **Node.js (service)** | `secretKey` | Single entity stream (`client.entities.subscribe`) |
 | **Your backend** | `secretKey` | Admin APIs for entity/membership management |
+| **CLI** | `secretKey` | All operations |

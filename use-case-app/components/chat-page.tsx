@@ -17,6 +17,9 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 import type { AuthSession } from "@/components/register-form";
 
+const GATEWAY_URL = process.env.NEXT_PUBLIC_HSAFA_GATEWAY_URL || "http://localhost:3001";
+const PUBLIC_KEY = process.env.NEXT_PUBLIC_HSAFA_PUBLIC_KEY || "";
+
 interface ChatPageProps {
   session: AuthSession;
   onLogout: () => void;
@@ -25,8 +28,9 @@ interface ChatPageProps {
 export function ChatPage({ session, onLogout }: ChatPageProps) {
   return (
     <HsafaProvider
-      gatewayUrl="http://localhost:3001"
-      secretKey={session.user.secretKey}
+      gatewayUrl={GATEWAY_URL}
+      publicKey={PUBLIC_KEY}
+      jwt={session.token}
     >
       <ChatPageInner session={session} onLogout={onLogout} />
     </HsafaProvider>
@@ -60,7 +64,7 @@ function ChatPageInner({
     },
   ]);
 
-  // Fetch all spaces the user is a member of
+  // Fetch all spaces the user is a member of (works with public key + JWT)
   useEffect(() => {
     client.spaces.list().then(({ smartSpaces }) => {
       if (smartSpaces && smartSpaces.length > 0) {
@@ -73,24 +77,26 @@ function ChatPageInner({
     setSelectedSpaceId(spaceId);
   }, []);
 
+  // Create new space via server-side API route (requires secret key)
   const handleNewThread = useCallback(async () => {
     try {
-      const { smartSpace } = await client.spaces.create({
-        name: `Chat ${new Date().toLocaleTimeString()}`,
-        visibility: "private",
+      const res = await fetch("/api/spaces/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({
+          name: `Chat ${new Date().toLocaleTimeString()}`,
+        }),
       });
 
-      // Add user as member
-      await client.spaces.addMember(smartSpace.id, {
-        entityId: session.user.entityId,
-        role: "admin",
-      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to create space");
+      }
 
-      // Add agent as member
-      await client.spaces.addMember(smartSpace.id, {
-        entityId: session.user.agentEntityId,
-        role: "member",
-      });
+      const { smartSpace } = await res.json();
 
       setSpaces((prev) => [
         ...prev,
@@ -100,12 +106,13 @@ function ChatPageInner({
     } catch (err) {
       console.error("Failed to create new space:", err);
     }
-  }, [client, session.user.entityId, session.user.agentEntityId]);
+  }, [session.token]);
 
   return (
     <HsafaChatProvider
-      gatewayUrl="http://localhost:3001"
-      secretKey={session.user.secretKey}
+      gatewayUrl={GATEWAY_URL}
+      publicKey={PUBLIC_KEY}
+      jwt={session.token}
       entityId={session.user.entityId}
       smartSpaceId={selectedSpaceId}
       smartSpaces={spaces.map((s) => ({ id: s.id, name: s.name }) as SmartSpace)}

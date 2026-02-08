@@ -259,7 +259,7 @@ The client SDK applies these defaults when no explicit display config is provide
 
 ### Permission-Based Visibility
 
-SmartSpaces have **secret key** (`sk_...`) for admin access and **public key** (`pk_...`) for regular access. The client SDK uses this to control prebuilt tool visibility:
+The system uses **secret key** (`sk_...`) for admin access and **public key** (`pk_...`) for regular access. Both are system-wide (env vars, not per-space). The client SDK uses this to control prebuilt tool visibility:
 
 | Permission Level | Prebuilt Tools Display |
 |-----------------|------------------------|

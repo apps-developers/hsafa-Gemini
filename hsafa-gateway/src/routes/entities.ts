@@ -3,11 +3,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/db.js';
 import { redis } from '../lib/redis.js';
 import { toSSEEvent } from '../lib/run-events.js';
-import { requireSpaceAdmin, requireSecretKey } from '../middleware/auth.js';
+import { requireSecretKey } from '../middleware/auth.js';
 
 export const entitiesRouter: ExpressRouter = Router();
 
-entitiesRouter.post('/', requireSpaceAdmin(), async (req, res) => {
+entitiesRouter.post('/', requireSecretKey(), async (req, res) => {
   try {
     const { type, externalId, displayName, metadata } = req.body;
 
@@ -54,7 +54,7 @@ entitiesRouter.post('/', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-entitiesRouter.post('/agent', requireSpaceAdmin(), async (req, res) => {
+entitiesRouter.post('/agent', requireSecretKey(), async (req, res) => {
   try {
     const { agentId, externalId, displayName, metadata } = req.body;
 
@@ -92,7 +92,7 @@ entitiesRouter.post('/agent', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-entitiesRouter.get('/', requireSpaceAdmin(), async (req, res) => {
+entitiesRouter.get('/', requireSecretKey(), async (req, res) => {
   try {
     const { type, limit = '50', offset = '0' } = req.query;
 
@@ -118,7 +118,7 @@ entitiesRouter.get('/', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-entitiesRouter.get('/:entityId', requireSpaceAdmin(), async (req, res) => {
+entitiesRouter.get('/:entityId', requireSecretKey(), async (req, res) => {
   try {
     const { entityId } = req.params;
 
@@ -140,7 +140,7 @@ entitiesRouter.get('/:entityId', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-entitiesRouter.patch('/:entityId', requireSpaceAdmin(), async (req, res) => {
+entitiesRouter.patch('/:entityId', requireSecretKey(), async (req, res) => {
   try {
     const { entityId } = req.params;
     const { displayName, metadata } = req.body;
@@ -163,7 +163,7 @@ entitiesRouter.patch('/:entityId', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-entitiesRouter.delete('/:entityId', requireSpaceAdmin(), async (req, res) => {
+entitiesRouter.delete('/:entityId', requireSecretKey(), async (req, res) => {
   try {
     const { entityId } = req.params;
 

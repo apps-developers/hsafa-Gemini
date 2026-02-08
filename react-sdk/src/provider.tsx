@@ -6,7 +6,6 @@ import { HsafaContext } from './context.js';
 
 export interface HsafaProviderProps {
   gatewayUrl: string;
-  adminKey?: string;
   secretKey?: string;
   publicKey?: string;
   jwt?: string;
@@ -15,7 +14,6 @@ export interface HsafaProviderProps {
 
 export function HsafaProvider({
   gatewayUrl,
-  adminKey,
   secretKey,
   publicKey,
   jwt,
@@ -26,7 +24,6 @@ export function HsafaProvider({
   if (!clientRef.current) {
     clientRef.current = new HsafaClient({
       gatewayUrl,
-      adminKey,
       secretKey,
       publicKey,
       jwt,
@@ -36,17 +33,16 @@ export function HsafaProvider({
   useEffect(() => {
     clientRef.current?.updateOptions({
       gatewayUrl,
-      adminKey,
       secretKey,
       publicKey,
       jwt,
     });
-  }, [gatewayUrl, adminKey, secretKey, publicKey, jwt]);
+  }, [gatewayUrl, secretKey, publicKey, jwt]);
 
   const value = useMemo(
     () => ({ client: clientRef.current! }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [gatewayUrl, adminKey, secretKey, publicKey, jwt]
+    [gatewayUrl, secretKey, publicKey, jwt]
   );
 
   return (

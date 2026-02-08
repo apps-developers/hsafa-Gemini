@@ -4,7 +4,6 @@
 
 export interface HsafaClientOptions {
   gatewayUrl: string;
-  adminKey?: string;
   secretKey?: string;
   publicKey?: string;
   jwt?: string;
@@ -39,8 +38,6 @@ export interface SmartSpace {
   name?: string | null;
   description?: string | null;
   isPrivate: boolean;
-  publicKey: string;
-  secretKey: string;
   metadata?: Record<string, unknown> | null;
   createdAt: string;
 }

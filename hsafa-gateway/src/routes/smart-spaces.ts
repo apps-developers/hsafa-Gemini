@@ -6,12 +6,11 @@ import { createSmartSpaceMessage } from '../lib/smartspace-db.js';
 import { emitSmartSpaceEvent } from '../lib/smartspace-events.js';
 import { toSSEEvent } from '../lib/run-events.js';
 import { triggerAgentsInSmartSpace } from '../lib/agent-trigger.js';
-import { generatePublicKey, generateSecretKey } from '../lib/keys.js';
-import { requireAuth, requireGatewayAdmin, requireSpaceAdmin, requireMembership } from '../middleware/auth.js';
+import { requireAuth, requireSecretKey, requireMembership } from '../middleware/auth.js';
 
 export const smartSpacesRouter: ExpressRouter = Router();
 
-smartSpacesRouter.post('/', requireGatewayAdmin(), async (req, res) => {
+smartSpacesRouter.post('/', requireSecretKey(), async (req, res) => {
   try {
     const { name, description, visibility, isPrivate, metadata } = req.body;
 
@@ -23,8 +22,6 @@ smartSpacesRouter.post('/', requireGatewayAdmin(), async (req, res) => {
         name: typeof name === 'string' ? name : null,
         description: typeof description === 'string' ? description : null,
         isPrivate: privateFlag,
-        publicKey: generatePublicKey(),
-        secretKey: generateSecretKey(),
         metadata: (metadata ?? null) as Prisma.InputJsonValue,
       },
     });
@@ -105,7 +102,7 @@ smartSpacesRouter.get('/:smartSpaceId', requireAuth(), requireMembership(), asyn
   }
 });
 
-smartSpacesRouter.patch('/:smartSpaceId', requireSpaceAdmin(), async (req, res) => {
+smartSpacesRouter.patch('/:smartSpaceId', requireSecretKey(), async (req, res) => {
   try {
     const { smartSpaceId } = req.params;
     const { name, description, isPrivate, visibility, metadata } = req.body;
@@ -133,7 +130,7 @@ smartSpacesRouter.patch('/:smartSpaceId', requireSpaceAdmin(), async (req, res) 
   }
 });
 
-smartSpacesRouter.delete('/:smartSpaceId', requireSpaceAdmin(), async (req, res) => {
+smartSpacesRouter.delete('/:smartSpaceId', requireSecretKey(), async (req, res) => {
   try {
     const { smartSpaceId } = req.params;
     await prisma.smartSpace.delete({ where: { id: smartSpaceId } });
@@ -147,7 +144,7 @@ smartSpacesRouter.delete('/:smartSpaceId', requireSpaceAdmin(), async (req, res)
   }
 });
 
-smartSpacesRouter.post('/:smartSpaceId/members', requireSpaceAdmin(), async (req, res) => {
+smartSpacesRouter.post('/:smartSpaceId/members', requireSecretKey(), async (req, res) => {
   try {
     const { smartSpaceId } = req.params;
     const { entityId, role } = req.body;
@@ -196,7 +193,7 @@ smartSpacesRouter.get('/:smartSpaceId/members', requireAuth(), requireMembership
   }
 });
 
-smartSpacesRouter.patch('/:smartSpaceId/members/:entityId', requireSpaceAdmin(), async (req, res) => {
+smartSpacesRouter.patch('/:smartSpaceId/members/:entityId', requireSecretKey(), async (req, res) => {
   try {
     const { smartSpaceId, entityId } = req.params;
     const { role } = req.body;
@@ -218,7 +215,7 @@ smartSpacesRouter.patch('/:smartSpaceId/members/:entityId', requireSpaceAdmin(),
   }
 });
 
-smartSpacesRouter.delete('/:smartSpaceId/members/:entityId', requireSpaceAdmin(), async (req, res) => {
+smartSpacesRouter.delete('/:smartSpaceId/members/:entityId', requireSecretKey(), async (req, res) => {
   try {
     const { smartSpaceId, entityId } = req.params;
 

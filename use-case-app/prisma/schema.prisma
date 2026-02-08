@@ -14,8 +14,6 @@ model User {
   passwordHash   String   @map("password_hash")
   hsafaEntityId  String?  @map("hsafa_entity_id")
   hsafaSpaceId   String?  @map("hsafa_space_id")
-  hsafaSecretKey String?  @map("hsafa_secret_key")
-  hsafaPublicKey String?  @map("hsafa_public_key")
   agentEntityId  String?  @map("agent_entity_id")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")

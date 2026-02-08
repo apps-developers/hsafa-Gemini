@@ -49,8 +49,6 @@ export async function POST(request: Request) {
         name: user.name,
         entityId: user.hsafaEntityId || "",
         smartSpaceId: user.hsafaSpaceId || "",
-        secretKey: user.hsafaSecretKey || "",
-        publicKey: user.hsafaPublicKey || "",
         agentEntityId: user.agentEntityId || "",
       },
     });

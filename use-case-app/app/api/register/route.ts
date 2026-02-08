@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { signToken } from "@/lib/auth";
 
 const GATEWAY_URL = process.env.HSAFA_GATEWAY_URL || "http://localhost:3001";
-const ADMIN_KEY = process.env.HSAFA_ADMIN_KEY || "gk_default_admin_key";
+const SECRET_KEY = process.env.HSAFA_SECRET_KEY || "";
 
 const AGENT_CONFIG = {
   version: "1.0",
@@ -83,55 +83,61 @@ export async function POST(request: Request) {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    const hsafaClient = new HsafaClient({
-      gatewayUrl: GATEWAY_URL,
-      adminKey: ADMIN_KEY,
-    });
-
-    // 1. Ensure the agent + agent entity exist
-    const agentEntityId = await ensureAgent(hsafaClient);
-
-    // 2. Create human entity in hsafa gateway
-    const { entity: human } = await hsafaClient.entities.create({
-      type: "human",
-      externalId: email,
-      displayName: name,
-      metadata: { email },
-    });
-
-    // 3. Create a SmartSpace for this user + agent
-    const { smartSpace } = await hsafaClient.spaces.create({
-      name: `${name}'s Chat`,
-      visibility: "private",
-    });
-
-    // 4. Add human as admin
-    await hsafaClient.spaces.addMember(smartSpace.id, {
-      entityId: human.id,
-      role: "admin",
-    });
-
-    // 5. Add agent as member
-    await hsafaClient.spaces.addMember(smartSpace.id, {
-      entityId: agentEntityId,
-      role: "member",
-    });
-
-    // 6. Store user in local database
+    // 1. Create user in local DB first (so we have user.id for externalId)
     const user = await prisma.user.create({
       data: {
         email,
         name,
         passwordHash,
+      },
+    });
+
+    const hsafaClient = new HsafaClient({
+      gatewayUrl: GATEWAY_URL,
+      secretKey: SECRET_KEY,
+    });
+
+    // 2. Ensure the agent + agent entity exist
+    const agentEntityId = await ensureAgent(hsafaClient);
+
+    // 3. Create human entity in hsafa gateway
+    //    externalId = user.id so it matches the JWT sub claim
+    const { entity: human } = await hsafaClient.entities.create({
+      type: "human",
+      externalId: user.id,
+      displayName: name,
+      metadata: { email },
+    });
+
+    // 4. Create a SmartSpace for this user + agent
+    const { smartSpace } = await hsafaClient.spaces.create({
+      name: `${name}'s Chat`,
+      visibility: "private",
+    });
+
+    // 5. Add human as admin
+    await hsafaClient.spaces.addMember(smartSpace.id, {
+      entityId: human.id,
+      role: "admin",
+    });
+
+    // 6. Add agent as member
+    await hsafaClient.spaces.addMember(smartSpace.id, {
+      entityId: agentEntityId,
+      role: "member",
+    });
+
+    // 7. Update user with hsafa references
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
         hsafaEntityId: human.id,
         hsafaSpaceId: smartSpace.id,
-        hsafaSecretKey: smartSpace.secretKey,
-        hsafaPublicKey: smartSpace.publicKey,
         agentEntityId,
       },
     });
 
-    // 7. Generate JWT
+    // 8. Generate JWT (sub = user.id, matches entity.externalId)
     const token = await signToken({
       sub: user.id,
       email: user.email,
@@ -148,8 +154,6 @@ export async function POST(request: Request) {
         name: user.name,
         entityId: human.id,
         smartSpaceId: smartSpace.id,
-        secretKey: smartSpace.secretKey,
-        publicKey: smartSpace.publicKey,
         agentEntityId,
       },
     });

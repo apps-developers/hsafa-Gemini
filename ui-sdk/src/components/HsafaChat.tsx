@@ -17,7 +17,6 @@ export function HsafaChat({
   smartSpaces,
   onSwitchThread,
   onNewThread,
-  adminKey,
   secretKey,
   publicKey,
   jwt,
@@ -36,7 +35,6 @@ export function HsafaChat({
       smartSpaces={smartSpaces}
       onSwitchThread={onSwitchThread}
       onNewThread={onNewThread}
-      adminKey={adminKey}
       secretKey={secretKey}
       publicKey={publicKey}
       jwt={jwt}

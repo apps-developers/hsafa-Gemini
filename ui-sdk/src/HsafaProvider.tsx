@@ -17,7 +17,6 @@ export interface HsafaChatProviderProps {
   smartSpaces?: SmartSpace[];
   onSwitchThread?: (smartSpaceId: string) => void;
   onNewThread?: () => void;
-  adminKey?: string;
   secretKey?: string;
   publicKey?: string;
   jwt?: string;
@@ -30,7 +29,14 @@ function HsafaChatProviderInner({
   smartSpaces = [],
   onSwitchThread,
   onNewThread,
-}: Omit<HsafaChatProviderProps, "gatewayUrl" | "adminKey" | "secretKey" | "publicKey" | "jwt">) {
+}: {
+  children: ReactNode;
+  entityId: string;
+  smartSpaceId: string | null;
+  smartSpaces?: SmartSpace[];
+  onSwitchThread?: (smartSpaceId: string) => void;
+  onNewThread?: () => void;
+}) {
   const { runtime, membersById } = useHsafaChatRuntime({
     smartSpaceId,
     entityId,
@@ -51,7 +57,6 @@ function HsafaChatProviderInner({
 export function HsafaChatProvider({
   children,
   gatewayUrl,
-  adminKey,
   secretKey,
   publicKey,
   jwt,
@@ -60,7 +65,6 @@ export function HsafaChatProvider({
   return (
     <HsafaSdkProvider
       gatewayUrl={gatewayUrl}
-      adminKey={adminKey}
       secretKey={secretKey}
       publicKey={publicKey}
       jwt={jwt}

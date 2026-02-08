@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/db.js';
 import { validateAgentConfig } from '../agent-builder/parser.js';
-import { requireSpaceAdmin } from '../middleware/auth.js';
+import { requireSecretKey } from '../middleware/auth.js';
 
 export const agentsRouter: ExpressRouter = Router();
 
@@ -32,7 +32,7 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(sortKeysDeep(value));
 }
 
-agentsRouter.post('/', requireSpaceAdmin(), async (req, res) => {
+agentsRouter.post('/', requireSecretKey(), async (req, res) => {
   try {
     const { name, config } = req.body;
 
@@ -97,7 +97,7 @@ agentsRouter.post('/', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-agentsRouter.get('/', requireSpaceAdmin(), async (req, res) => {
+agentsRouter.get('/', requireSecretKey(), async (req, res) => {
   try {
     const { limit = '50', offset = '0' } = req.query;
 
@@ -117,7 +117,7 @@ agentsRouter.get('/', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-agentsRouter.get('/:agentId', requireSpaceAdmin(), async (req, res) => {
+agentsRouter.get('/:agentId', requireSecretKey(), async (req, res) => {
   try {
     const { agentId } = req.params;
 
@@ -139,7 +139,7 @@ agentsRouter.get('/:agentId', requireSpaceAdmin(), async (req, res) => {
   }
 });
 
-agentsRouter.delete('/:agentId', requireSpaceAdmin(), async (req, res) => {
+agentsRouter.delete('/:agentId', requireSecretKey(), async (req, res) => {
   try {
     const { agentId } = req.params;
     await prisma.agent.delete({ where: { id: agentId } });

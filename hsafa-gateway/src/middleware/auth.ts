@@ -8,10 +8,8 @@ import { prisma } from '../lib/db.js';
 
 export interface AuthContext {
   /** The authentication method used */
-  method: 'gateway_admin' | 'secret_key' | 'public_key_jwt';
-  /** The resolved SmartSpace ID (only set for space-scoped auth) */
-  smartSpaceId?: string;
-  /** The resolved Entity ID (from JWT or from request) */
+  method: 'secret_key' | 'public_key_jwt';
+  /** The resolved Entity ID (from JWT) */
   entityId?: string;
   /** The entity's externalId from JWT */
   externalId?: string;
@@ -29,7 +27,8 @@ declare global {
 // JWT Configuration
 // =============================================================================
 
-const GATEWAY_ADMIN_KEY = process.env.GATEWAY_ADMIN_KEY;
+const HSAFA_SECRET_KEY = process.env.HSAFA_SECRET_KEY;
+const HSAFA_PUBLIC_KEY = process.env.HSAFA_PUBLIC_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWKS_URL = process.env.JWKS_URL;
 const JWT_ENTITY_CLAIM = process.env.JWT_ENTITY_CLAIM || 'sub';
@@ -74,51 +73,16 @@ function extractExternalId(payload: JWTPayload): string | null {
 }
 
 // =============================================================================
-// Middleware: Gateway Admin Key Authentication
+// Middleware: Secret Key Authentication (Full Access)
 // =============================================================================
 
 /**
- * Authenticates requests using the gateway-level admin key.
- * Used for gateway-wide operations: creating spaces, managing entities, etc.
- * The key must be passed in the `x-admin-key` header.
- */
-export function requireGatewayAdmin() {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const adminKey = req.headers['x-admin-key'] as string | undefined;
-
-      if (!adminKey) {
-        res.status(401).json({ error: 'Missing x-admin-key header' });
-        return;
-      }
-
-      if (!GATEWAY_ADMIN_KEY || adminKey !== GATEWAY_ADMIN_KEY) {
-        res.status(401).json({ error: 'Invalid admin key' });
-        return;
-      }
-
-      req.auth = {
-        method: 'gateway_admin',
-      };
-
-      next();
-    } catch (error) {
-      console.error('Gateway admin auth error:', error);
-      res.status(500).json({ error: 'Authentication failed' });
-    }
-  };
-}
-
-// =============================================================================
-// Middleware: Secret Key Authentication
-// =============================================================================
-
-/**
- * Authenticates requests using a SmartSpace secret key.
+ * Authenticates requests using the system-wide secret key.
  * The secret key must be passed in the `x-secret-key` header.
- * Grants full admin access to the SmartSpace.
+ * Grants full admin access to all gateway operations.
  *
- * Usage: For admin backends and Node.js services.
+ * Usage: For admin backends, Node.js services, and CLI.
+ * Optionally accepts a JWT to identify who sent a message.
  */
 export function requireSecretKey() {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -130,20 +94,40 @@ export function requireSecretKey() {
         return;
       }
 
-      // Look up SmartSpace by secret key
-      const smartSpace = await prisma.smartSpace.findUnique({
-        where: { secretKey },
-        select: { id: true },
-      });
-
-      if (!smartSpace) {
+      if (!HSAFA_SECRET_KEY || secretKey !== HSAFA_SECRET_KEY) {
         res.status(401).json({ error: 'Invalid secret key' });
         return;
       }
 
+      // Optionally resolve entity from JWT if provided
+      const authHeader = req.headers['authorization'] as string | undefined;
+      let entityId: string | undefined;
+      let externalId: string | undefined;
+
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.slice(7);
+          const payload = await verifyJWT(token);
+          externalId = extractExternalId(payload) ?? undefined;
+
+          if (externalId) {
+            const entity = await prisma.entity.findUnique({
+              where: { externalId },
+              select: { id: true },
+            });
+            if (entity) {
+              entityId = entity.id;
+            }
+          }
+        } catch {
+          // JWT is optional with secret key — ignore verification errors
+        }
+      }
+
       req.auth = {
         method: 'secret_key',
-        smartSpaceId: smartSpace.id,
+        entityId,
+        externalId,
       };
 
       next();
@@ -155,16 +139,17 @@ export function requireSecretKey() {
 }
 
 // =============================================================================
-// Middleware: Public Key + JWT Authentication
+// Middleware: Public Key + JWT Authentication (Limited Access)
 // =============================================================================
 
 /**
- * Authenticates requests using a public key + JWT token.
- * - Public key in `x-public-key` header identifies the SmartSpace.
+ * Authenticates requests using the system-wide public key + JWT token.
+ * - Public key in `x-public-key` header validates the request comes from a known client.
  * - JWT in `Authorization: Bearer <token>` header identifies the human user.
  * - Resolves the entity by matching JWT claim to entity.externalId.
  *
  * Usage: For React/browser clients with human users.
+ * Limited capabilities: send messages, read streams, submit tool results.
  */
 export function requirePublicKeyJWT() {
   return async (req: Request, res: Response, next: NextFunction) => {
@@ -177,6 +162,11 @@ export function requirePublicKeyJWT() {
         return;
       }
 
+      if (!HSAFA_PUBLIC_KEY || publicKey !== HSAFA_PUBLIC_KEY) {
+        res.status(401).json({ error: 'Invalid public key' });
+        return;
+      }
+
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
         res.status(401).json({ error: 'Missing or invalid Authorization header' });
         return;
@@ -184,18 +174,7 @@ export function requirePublicKeyJWT() {
 
       const token = authHeader.slice(7);
 
-      // 1. Look up SmartSpace by public key
-      const smartSpace = await prisma.smartSpace.findUnique({
-        where: { publicKey },
-        select: { id: true },
-      });
-
-      if (!smartSpace) {
-        res.status(401).json({ error: 'Invalid public key' });
-        return;
-      }
-
-      // 2. Verify JWT
+      // 1. Verify JWT
       let payload: JWTPayload;
       try {
         payload = await verifyJWT(token);
@@ -204,14 +183,14 @@ export function requirePublicKeyJWT() {
         return;
       }
 
-      // 3. Extract external ID from JWT
+      // 2. Extract external ID from JWT
       const externalId = extractExternalId(payload);
       if (!externalId) {
         res.status(401).json({ error: `JWT missing claim: ${JWT_ENTITY_CLAIM}` });
         return;
       }
 
-      // 4. Look up entity by externalId
+      // 3. Look up entity by externalId
       const entity = await prisma.entity.findUnique({
         where: { externalId },
         select: { id: true },
@@ -224,7 +203,6 @@ export function requirePublicKeyJWT() {
 
       req.auth = {
         method: 'public_key_jwt',
-        smartSpaceId: smartSpace.id,
         entityId: entity.id,
         externalId,
       };
@@ -243,21 +221,15 @@ export function requirePublicKeyJWT() {
 
 /**
  * Accepts either authentication method:
- * - Gateway admin key (gateway-wide operations)
- * - Secret key (space admin/service access)
- * - Public key + JWT (human user access)
+ * - Secret key (full admin access)
+ * - Public key + JWT (human user access, limited)
  *
- * Tries admin key first, then secret key, then public key + JWT.
+ * Tries secret key first, then public key + JWT.
  */
 export function requireAuth() {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const adminKey = req.headers['x-admin-key'] as string | undefined;
     const secretKey = req.headers['x-secret-key'] as string | undefined;
     const publicKey = req.headers['x-public-key'] as string | undefined;
-
-    if (adminKey) {
-      return requireGatewayAdmin()(req, res, next);
-    }
 
     if (secretKey) {
       return requireSecretKey()(req, res, next);
@@ -268,30 +240,7 @@ export function requireAuth() {
     }
 
     res.status(401).json({
-      error: 'Authentication required. Provide x-admin-key, x-secret-key, or x-public-key + Authorization header.',
-    });
-  };
-}
-
-/**
- * Accepts either secret key or gateway admin key.
- * For space management operations (update, delete, manage members).
- */
-export function requireSpaceAdmin() {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    const adminKey = req.headers['x-admin-key'] as string | undefined;
-    const secretKey = req.headers['x-secret-key'] as string | undefined;
-
-    if (adminKey) {
-      return requireGatewayAdmin()(req, res, next);
-    }
-
-    if (secretKey) {
-      return requireSecretKey()(req, res, next);
-    }
-
-    res.status(401).json({
-      error: 'Space admin access required. Provide x-admin-key or x-secret-key header.',
+      error: 'Authentication required. Provide x-secret-key, or x-public-key + Authorization header.',
     });
   };
 }
@@ -304,7 +253,8 @@ export function requireSpaceAdmin() {
  * Checks that the authenticated entity is a member of the SmartSpace.
  * Must be used AFTER requireAuth() or requirePublicKeyJWT().
  *
- * For secret key auth: checks entityId from request body/params.
+ * The SmartSpace ID comes from the route params (`:smartSpaceId`).
+ * For secret key auth: skips membership check (full access).
  * For public key + JWT auth: checks the resolved entityId from JWT.
  */
 export function requireMembership() {
@@ -315,10 +265,10 @@ export function requireMembership() {
         return;
       }
 
-      const { smartSpaceId, method } = req.auth;
+      const { method } = req.auth;
 
-      // Admin or secret key = full access, skip membership check
-      if (method === 'gateway_admin' || method === 'secret_key') {
+      // Secret key = full access, skip membership check
+      if (method === 'secret_key') {
         return next();
       }
 
@@ -329,8 +279,10 @@ export function requireMembership() {
         return;
       }
 
+      // Get smartSpaceId from route params
+      const smartSpaceId = req.params.smartSpaceId;
       if (!smartSpaceId) {
-        res.status(403).json({ error: 'No SmartSpace resolved from authentication' });
+        res.status(403).json({ error: 'No SmartSpace ID in route params' });
         return;
       }
 

@@ -6,12 +6,12 @@ import { createEmitEvent, toSSEEvent } from '../lib/run-events.js';
 import { executeRun } from '../lib/run-runner.js';
 import { submitToolResult } from '../lib/tool-results.js';
 import { emitSmartSpaceEvent } from '../lib/smartspace-events.js';
-import { requireAuth, requireSpaceAdmin } from '../middleware/auth.js';
+import { requireAuth, requireSecretKey } from '../middleware/auth.js';
 
 export const runsRouter: ExpressRouter = Router();
 
 // GET /api/runs - List runs (debugging/history)
-runsRouter.get('/', requireSpaceAdmin(), async (req: Request, res: Response) => {
+runsRouter.get('/', requireSecretKey(), async (req: Request, res: Response) => {
   try {
     const { agentId, agentEntityId, smartSpaceId, status, limit = '50', offset = '0' } = req.query;
 
@@ -48,7 +48,7 @@ runsRouter.get('/', requireSpaceAdmin(), async (req: Request, res: Response) => 
 });
 
 // POST /api/runs - Create a new run (debugging)
-runsRouter.post('/', requireSpaceAdmin(), async (req: Request, res: Response) => {
+runsRouter.post('/', requireSecretKey(), async (req: Request, res: Response) => {
   try {
     const { smartSpaceId, agentEntityId, agentId, triggeredById, parentRunId, metadata, start = true } = req.body;
 
@@ -110,7 +110,7 @@ runsRouter.post('/', requireSpaceAdmin(), async (req: Request, res: Response) =>
   }
 });
 
-runsRouter.post('/:runId/cancel', requireSpaceAdmin(), async (req: Request, res: Response) => {
+runsRouter.post('/:runId/cancel', requireSecretKey(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
     const run = await prisma.run.findUnique({ where: { id: runId } });
@@ -300,7 +300,7 @@ runsRouter.get('/:runId', requireAuth(), async (req: Request, res: Response) => 
 });
 
 // DELETE /api/runs/:runId - Delete a run and its events
-runsRouter.delete('/:runId', requireSpaceAdmin(), async (req: Request, res: Response) => {
+runsRouter.delete('/:runId', requireSecretKey(), async (req: Request, res: Response) => {
   try {
     const { runId } = req.params;
 

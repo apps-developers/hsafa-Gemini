@@ -26,9 +26,13 @@ Every SDK must be initialized with one of these auth modes:
 
 | Mode | Headers Sent | Who Uses It | Capabilities |
 |------|-------------|-------------|--------------|
-| **Admin** | `x-admin-key` | Your backend, CLI | Everything: create spaces, entities, agents |
-| **SecretKey** | `x-secret-key` | Node.js services, robots | Space-scoped admin: send messages, manage members, subscribe |
-| **PublicKey + JWT** | `x-public-key` + `Authorization: Bearer` | React/mobile apps | User-scoped: send messages as self, read own spaces |
+| **SecretKey** | `x-secret-key` | Your backend, Node.js services, robots, CLI | Full access: create spaces, entities, agents, send messages, manage members, subscribe |
+| **PublicKey + JWT** | `x-public-key` + `Authorization: Bearer` | React/mobile apps | User-scoped: send messages as self, read streams, submit tool results |
+
+Both keys are **system-wide** (set as environment variables), not per-SmartSpace.
+
+- **Secret key** (`sk_...`) — Full admin access. Used server-side only. Optionally pass a JWT to identify who sent a message.
+- **Public key** (`pk_...`) — Limited access, safe to expose in browser code. Always requires a valid JWT to identify the human user.
 
 ---
 
@@ -39,16 +43,17 @@ Every SDK must be initialized with one of these auth modes:
 ```ts
 import { HsafaClient } from '@hsafa/node';
 
-// Mode 1: Gateway Admin (full access)
+// Mode 1: Secret Key (full access — backends, services, CLI)
 const admin = new HsafaClient({
   gatewayUrl: 'http://localhost:3001',
-  adminKey: 'gk_...',
+  secretKey: 'sk_...',
 });
 
-// Mode 2: Space Secret Key (space-scoped admin)
+// Mode 2: Secret Key + JWT (full access, JWT identifies the sender)
 const service = new HsafaClient({
   gatewayUrl: 'http://localhost:3001',
   secretKey: 'sk_...',
+  jwt: 'eyJ...',  // optional: identifies which human sent the message
 });
 
 // Mode 3: Public Key + JWT (human user — rare in Node, common in React)
@@ -126,14 +131,12 @@ await client.entities.delete(entityId);
 ### SmartSpaces
 
 ```ts
-// Create SmartSpace (returns publicKey + secretKey)
+// Create SmartSpace
 const { smartSpace } = await client.spaces.create({
   name: 'Project Chat',
   visibility: 'private',
   metadata: {},
 });
-// smartSpace.publicKey = 'pk_...'
-// smartSpace.secretKey = 'sk_...'
 
 // List SmartSpaces
 const { smartSpaces } = await client.spaces.list({ limit: 50 });
@@ -386,9 +389,7 @@ function App() {
       // For human users:
       publicKey="pk_..."
       jwt={userToken}
-      // OR for admin panels:
-      // adminKey="gk_..."
-      // OR for service dashboards:
+      // OR for admin panels / service dashboards:
       // secretKey="sk_..."
     >
       <MyApp />
@@ -473,7 +474,7 @@ const {
 
 ## Admin Hooks
 
-These hooks require `adminKey` or `secretKey` auth.
+These hooks require `secretKey` auth.
 
 ### `useAgents()`
 
@@ -601,16 +602,17 @@ pip install hsafa
 ```python
 from hsafa import HsafaClient
 
-# Admin mode
-client = HsafaClient(
-    gateway_url="http://localhost:3001",
-    admin_key="gk_..."
-)
-
-# Secret key mode
+# Secret key mode (full access)
 client = HsafaClient(
     gateway_url="http://localhost:3001",
     secret_key="sk_..."
+)
+
+# Secret key + JWT (full access, JWT identifies sender)
+client = HsafaClient(
+    gateway_url="http://localhost:3001",
+    secret_key="sk_...",
+    jwt="eyJ..."
 )
 ```
 
@@ -630,7 +632,6 @@ client.entities.delete(entity_id)
 
 # Spaces
 space = client.spaces.create(name="My Chat", visibility="private")
-# space.public_key, space.secret_key
 spaces = client.spaces.list()
 client.spaces.delete(space_id)
 
@@ -675,6 +676,7 @@ import asyncio
 from hsafa import AsyncHsafaClient
 
 client = AsyncHsafaClient(gateway_url="http://localhost:3001", secret_key="sk_...")
+# Keys are system-wide, not per-space
 
 async def main():
     entity = await client.entities.create(type="system", display_name="Bot")
@@ -726,9 +728,10 @@ print(response.tool_calls)
 
 | Auth Mode | Node.js | React | Python |
 |-----------|---------|-------|--------|
-| Admin key (`x-admin-key`) | ✅ Admin backends | ✅ Admin panels | ✅ Scripts |
-| Secret key (`x-secret-key`) | ✅ Services, robots | ✅ Service dashboards | ✅ Services, bots |
+| Secret key (`x-secret-key`) | ✅ Backends, services, robots | ✅ Admin panels, service dashboards | ✅ Scripts, services, bots |
 | Public key + JWT (`x-public-key` + Bearer) | ✅ (rare) | ✅ User chat UIs | ✅ (rare) |
+
+Both keys are system-wide (environment variables). The secret key is never exposed to clients.
 
 ---
 
@@ -744,7 +747,7 @@ import { HsafaClient } from '@hsafa/node';
 
 const hsafa = new HsafaClient({
   gatewayUrl: process.env.HSAFA_GATEWAY_URL,
-  adminKey: process.env.HSAFA_ADMIN_KEY,
+  secretKey: process.env.HSAFA_SECRET_KEY,
 });
 
 export async function POST(req: Request) {
@@ -782,7 +785,6 @@ export async function POST(req: Request) {
     data: {
       hsafaEntityId: human.id,
       hsafaSpaceId: smartSpace.id,
-      hsafaPublicKey: smartSpace.publicKey,
     },
   });
 
@@ -804,7 +806,7 @@ function ChatPage() {
   return (
     <HsafaProvider
       gatewayUrl={process.env.NEXT_PUBLIC_HSAFA_GATEWAY_URL}
-      publicKey={user.hsafaPublicKey}
+      publicKey={process.env.NEXT_PUBLIC_HSAFA_PUBLIC_KEY}
       jwt={getToken()}
     >
       <Chat spaceId={user.hsafaSpaceId} />
@@ -841,7 +843,7 @@ function AdminLayout({ children }) {
   return (
     <HsafaProvider
       gatewayUrl={process.env.NEXT_PUBLIC_HSAFA_GATEWAY_URL}
-      secretKey={process.env.NEXT_PUBLIC_HSAFA_SECRET_KEY}  // only for internal admin!
+      secretKey={process.env.NEXT_PUBLIC_HSAFA_SECRET_KEY}  // only for internal admin panels!
     >
       {children}
     </HsafaProvider>
@@ -894,8 +896,7 @@ function SpacesPage() {
       visibility: 'private',
     });
 
-    // Show the keys to the admin
-    alert(`Public Key: ${smartSpace.publicKey}\nSecret Key: ${smartSpace.secretKey}`);
+    alert(`Space created: ${smartSpace.id}`);
   };
 
   return (
@@ -1123,8 +1124,6 @@ async function setupMultiAgentSystem() {
 
   console.log('Multi-agent system ready!');
   console.log('Space ID:', smartSpace.id);
-  console.log('Public Key:', smartSpace.publicKey);
-  console.log('Secret Key:', smartSpace.secretKey);
 }
 
 setupMultiAgentSystem();
@@ -1139,10 +1138,9 @@ setupMultiAgentSystem();
 ```ts
 interface HsafaClientOptions {
   gatewayUrl: string;
-  adminKey?: string;     // x-admin-key
-  secretKey?: string;    // x-secret-key
-  publicKey?: string;    // x-public-key (requires jwt)
-  jwt?: string;          // Authorization: Bearer
+  secretKey?: string;    // x-secret-key (full access)
+  publicKey?: string;    // x-public-key (limited access, requires jwt)
+  jwt?: string;          // Authorization: Bearer (required with publicKey, optional with secretKey)
 }
 
 interface Agent {
@@ -1170,8 +1168,6 @@ interface SmartSpace {
   name?: string;
   description?: string;
   isPrivate: boolean;
-  publicKey: string;   // pk_...
-  secretKey: string;   // sk_...
   metadata?: Record<string, unknown>;
   createdAt: string;
 }

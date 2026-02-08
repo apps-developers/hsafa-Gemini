@@ -116,7 +116,7 @@ Your `schema.prisma` already contains the *right high-level* tables:
 
 ### Schema highlights
 
-- **SmartSpace** has `publicKey` (`pk_...`) and `secretKey` (`sk_...`) fields for authentication — auto-generated on creation
+- **SmartSpace** no longer has per-space keys — authentication uses system-wide `HSAFA_SECRET_KEY` and `HSAFA_PUBLIC_KEY` env vars
 - **Entity** has `externalId` for mapping to external auth systems (e.g., JWT `sub` claim)
 - **Run** uses `smartSpaceId`, `agentEntityId`, `agentId`, `triggeredById`, `parentRunId`
 - **ToolExecutionTarget** enum: `server | client | external`
@@ -193,12 +193,11 @@ All endpoints are available via **REST API**, **SDKs** (React, React Native, Nod
 All API requests require authentication via one of these headers:
 
 | Header | Purpose | Access Level |
-|--------|---------|--------------|
-| `x-admin-key` | Gateway admin key (`GATEWAY_ADMIN_KEY` env var) | Full gateway access — create spaces, manage all resources |
-| `x-secret-key` | SmartSpace secret key (`sk_...`) | Full admin access to a specific SmartSpace |
-| `x-public-key` + `Authorization: Bearer <JWT>` | Public key (`pk_...`) + user JWT | User-level access with membership enforcement |
+|--------|---------|---------------|
+| `x-secret-key` | System-wide secret key (`HSAFA_SECRET_KEY` env var) | Full access — create spaces, manage all resources, send messages |
+| `x-public-key` + `Authorization: Bearer <JWT>` | System-wide public key (`HSAFA_PUBLIC_KEY` env var) + user JWT | User-level access — send messages, read streams, submit tool results |
 
-See **Section 13** for detailed auth patterns.
+Both keys are system-wide environment variables, not per-SmartSpace. See **Section 13** for detailed auth patterns.
 
 ---
 
@@ -206,7 +205,7 @@ See **Section 13** for detailed auth patterns.
 
 Agents are config definitions. An Agent Entity is created when you want an agent to participate in SmartSpaces.
 
-**Auth:** `x-admin-key` or `x-secret-key` required (space admin).
+**Auth:** `x-secret-key` required.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -221,7 +220,7 @@ Agents are config definitions. An Agent Entity is created when you want an agent
 
 Entities are identities (human, agent, system) that can participate in SmartSpaces.
 
-**Auth:** `x-admin-key` or `x-secret-key` required (space admin).
+**Auth:** `x-secret-key` required.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -264,17 +263,13 @@ Entities are identities (human, agent, system) that can participate in SmartSpac
 
 SmartSpaces are shared context spaces. This is the **primary interaction point**.
 
-Each SmartSpace has auto-generated keys:
-- `publicKey` (`pk_...`) — identifies the space, grants read-level access when combined with JWT
-- `secretKey` (`sk_...`) — grants full admin access to the space
-
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| `POST` | `/api/smart-spaces` | `x-admin-key` | Create a SmartSpace (returns keys) |
+| `POST` | `/api/smart-spaces` | `x-secret-key` | Create a SmartSpace |
 | `GET` | `/api/smart-spaces` | Any auth | List SmartSpaces (JWT users see only their spaces) |
 | `GET` | `/api/smart-spaces/:smartSpaceId` | Any auth + membership | Get SmartSpace details |
-| `PATCH` | `/api/smart-spaces/:smartSpaceId` | Space admin | Update SmartSpace (name, visibility) |
-| `DELETE` | `/api/smart-spaces/:smartSpaceId` | Space admin | Delete SmartSpace |
+| `PATCH` | `/api/smart-spaces/:smartSpaceId` | `x-secret-key` | Update SmartSpace (name, visibility) |
+| `DELETE` | `/api/smart-spaces/:smartSpaceId` | `x-secret-key` | Delete SmartSpace |
 
 **Create SmartSpace request:**
 ```json
@@ -285,14 +280,13 @@ Each SmartSpace has auto-generated keys:
 }
 ```
 
-**Response includes auto-generated keys:**
+**Response:**
 ```json
 {
   "smartSpace": {
     "id": "uuid",
     "name": "Project Chat",
-    "publicKey": "pk_abc123...",
-    "secretKey": "sk_xyz789..."
+    "isPrivate": true
   }
 }
 ```
@@ -303,7 +297,7 @@ Each SmartSpace has auto-generated keys:
 
 Manage who can participate in a SmartSpace.
 
-**Auth:** `x-admin-key` or `x-secret-key` required (space admin) for write operations. Any auth + membership for reads.
+**Auth:** `x-secret-key` required for write operations. Any auth + membership for reads.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -856,41 +850,27 @@ Start with:
 
 ## 13) Security & Identity (implemented)
 
-The Gateway implements a **3-tier authentication system** with per-SmartSpace keys and optional JWT verification for human users.
+The Gateway implements a **2-key authentication system** with system-wide keys and optional JWT verification for human users.
 
-### 13.1 Authentication Tiers
+### 13.1 Authentication Modes
 
-#### Tier 1: Gateway Admin Key
+#### Mode 1: Secret Key (Full Access)
 
-For gateway-wide operations (creating SmartSpaces, managing entities/agents).
-
-```
-┌─────────────────┐                         ┌─────────────┐
-│  Admin Backend   │ ──────────────────────▶ │   Gateway   │
-│  or CLI          │   x-admin-key: gk_...  │             │
-└─────────────────┘                         └─────────────┘
-```
-
-- Set via `GATEWAY_ADMIN_KEY` environment variable
-- Grants full access to all gateway operations
-- **Never expose to clients** — only used by your backend or CLI
-
-#### Tier 2: SmartSpace Secret Key
-
-For space-scoped admin operations and Node.js service access.
+For backends, services, CLI, and all admin operations.
 
 ```
 ┌─────────────────┐                         ┌─────────────┐
-│  Node.js         │ ──────────────────────▶ │   Gateway   │
-│  Service         │  x-secret-key: sk_...  │             │
+│  Backend / CLI   │ ──────────────────────▶ │   Gateway   │
+│  Node.js Service │  x-secret-key: sk_...  │             │
 │                  │  + entityId in body     │  trusts     │
 └─────────────────┘                         └─────────────┘
 ```
 
-- Each SmartSpace has a unique `secretKey` (`sk_...`), auto-generated on creation
-- Grants full admin access to that specific SmartSpace
-- Services pass `entityId` in request body (trusted because secret key = admin)
-- Used for: sending messages on behalf of entities, managing members, creating runs
+- Set via `HSAFA_SECRET_KEY` environment variable (system-wide)
+- Grants full access to all gateway operations
+- **Never expose to clients** — only used by your backend, services, or CLI
+- Services pass `entityId` in request body (trusted because secret key = full admin)
+- Optionally pass JWT to identify who sent a message (auto-resolves entityId from token)
 
 **Service usage:**
 
@@ -898,7 +878,7 @@ For space-scoped admin operations and Node.js service access.
 await fetch(`${GATEWAY_URL}/api/smart-spaces/${smartSpaceId}/messages`, {
   method: 'POST',
   headers: {
-    'x-secret-key': process.env.SMARTSPACE_SECRET_KEY,  // sk_...
+    'x-secret-key': process.env.HSAFA_SECRET_KEY,  // sk_...
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({
@@ -908,7 +888,7 @@ await fetch(`${GATEWAY_URL}/api/smart-spaces/${smartSpaceId}/messages`, {
 });
 ```
 
-#### Tier 3: Public Key + JWT (Human Users)
+#### Mode 2: Public Key + JWT (Human Users)
 
 For browser/mobile clients where human users authenticate via their existing auth provider.
 
@@ -924,18 +904,21 @@ For browser/mobile clients where human users authenticate via their existing aut
 
 1. User logs into the app (Auth0, Firebase, Supabase, Clerk, etc.)
 2. App receives a JWT for the user
-3. React SDK sends `x-public-key` (identifies the SmartSpace) + `Authorization: Bearer <JWT>` (identifies the user)
-4. Gateway verifies the JWT (via shared secret or JWKS URL)
-5. Gateway extracts the configured claim (default: `sub`) → maps to `Entity.externalId`
-6. Gateway checks that the resolved entity is a **member** of the SmartSpace
-7. For `POST /messages`, `entityId` is auto-resolved from JWT (prevents impersonation)
+3. React SDK sends `x-public-key` (system-wide, safe for browser) + `Authorization: Bearer <JWT>` (identifies the user)
+4. Gateway validates the public key matches `HSAFA_PUBLIC_KEY` env var
+5. Gateway verifies the JWT (via shared secret or JWKS URL)
+6. Gateway extracts the configured claim (default: `sub`) → maps to `Entity.externalId`
+7. Gateway checks that the resolved entity is a **member** of the SmartSpace
+8. For `POST /messages`, `entityId` is auto-resolved from JWT (prevents impersonation)
+
+**Limited capabilities:** send messages, read streams, submit tool results, list own spaces.
 
 **SDK usage:**
 
 ```tsx
 <HsafaProvider
   gatewayUrl="https://gateway.example.com"
-  publicKey="pk_abc123..."   // identifies the SmartSpace
+  publicKey="pk_abc123..."   // system-wide public key
   jwt={userJwt}              // user's JWT from their auth provider
 >
   <MyApp />
@@ -945,10 +928,14 @@ For browser/mobile clients where human users authenticate via their existing aut
 **Gateway environment config:**
 
 ```bash
-# Option 1: Shared secret (for Supabase, custom JWT)
+# System-wide keys
+HSAFA_SECRET_KEY="sk_..."
+HSAFA_PUBLIC_KEY="pk_..."
+
+# JWT verification (Option 1: Shared secret)
 JWT_SECRET="your-jwt-secret"
 
-# Option 2: JWKS URL (for Auth0, Firebase, Cognito, Clerk)
+# JWT verification (Option 2: JWKS URL for Auth0, Firebase, Cognito, Clerk)
 JWKS_URL="https://your-auth-domain/.well-known/jwks.json"
 
 # Which JWT claim maps to Entity.externalId (default: "sub")
@@ -972,23 +959,21 @@ JWT_ENTITY_CLAIM="sub"
 The gateway uses composable Express middleware:
 
 | Middleware | Header(s) | Purpose |
-|------------|-----------|---------|
-| `requireGatewayAdmin()` | `x-admin-key` | Gateway-wide operations |
-| `requireSecretKey()` | `x-secret-key` | Space-scoped admin access |
-| `requirePublicKeyJWT()` | `x-public-key` + `Authorization` | Human user access |
-| `requireAuth()` | Any of the above | Accepts any auth method |
-| `requireSpaceAdmin()` | `x-admin-key` or `x-secret-key` | Admin-only operations |
+|------------|-----------|----------|
+| `requireSecretKey()` | `x-secret-key` | Full admin access |
+| `requirePublicKeyJWT()` | `x-public-key` + `Authorization` | Human user access (limited) |
+| `requireAuth()` | Either of the above | Accepts any auth method |
 | `requireMembership()` | (chained after auth) | Verifies entity is a SmartSpace member |
 
 ### 13.3 Route Protection Summary
 
 | Route Category | Auth Required |
 |----------------|---------------|
-| Create SmartSpace | Gateway admin (`x-admin-key`) |
-| Update/Delete SmartSpace, Manage members | Space admin (`x-admin-key` or `x-secret-key`) |
+| Create/Update/Delete SmartSpace | Secret key (`x-secret-key`) |
+| Manage members (add/update/remove) | Secret key (`x-secret-key`) |
 | Send messages, Read messages, Stream, Tool results | Any auth + membership check |
-| Entity/Agent/Client CRUD | Space admin |
-| Run management (create, cancel, delete) | Space admin |
+| Entity/Agent/Client CRUD | Secret key (`x-secret-key`) |
+| Run management (create, cancel, delete) | Secret key (`x-secret-key`) |
 | Run read (get, events, stream) | Any auth |
 | Entity stream (subscribeAll) | Secret key (`x-secret-key`) |
 
@@ -996,16 +981,18 @@ The gateway uses composable Express middleware:
 
 | Caller | Auth method | Header | Entity mapping |
 |--------|-------------|--------|----------------|
-| Admin backend / CLI | Gateway admin key | `x-admin-key` | N/A (full access) |
-| Node.js service | SmartSpace secret key | `x-secret-key` | `entityId` in request body |
+| Backend / CLI | Secret key | `x-secret-key` | `entityId` in request body (or optional JWT) |
+| Node.js service | Secret key | `x-secret-key` | `entityId` in request body |
 | Browser / React SDK | Public key + JWT | `x-public-key` + `Authorization` | JWT claim → `Entity.externalId` |
 | Mobile app | Public key + JWT | `x-public-key` + `Authorization` | JWT claim → `Entity.externalId` |
 
 **Key principles:**
-- The browser **never** sees admin keys or secret keys
+- The browser **never** sees the secret key
+- The public key is useless without a valid JWT
 - Human users authenticate with their existing auth provider; the gateway verifies their JWT directly
 - JWT users cannot impersonate other entities — `entityId` is resolved from the token
 - Membership is enforced for all space-scoped read/write operations
+- Both keys are system-wide (environment variables), not per-SmartSpace
 
 ---
 
@@ -1029,8 +1016,8 @@ The gateway uses composable Express middleware:
 
 ### Phase 3 — Authentication & Authorization ✅ DONE
 
-- ✅ Gateway admin key (`x-admin-key`)
-- ✅ Per-SmartSpace secret key (`x-secret-key`) + public key (`x-public-key`)
+- ✅ System-wide secret key (`x-secret-key`) — full access
+- ✅ System-wide public key (`x-public-key`) — limited access for browser clients
 - ✅ JWT verification (shared secret + JWKS URL)
 - ✅ Membership enforcement middleware
 - ✅ Entity auto-resolve from JWT (prevents impersonation)
@@ -1069,7 +1056,7 @@ The gateway uses composable Express middleware:
 - **Run-level SSE streaming** with reconnect support (`since`)
 - **Entity stream** (subscribeAll): single SSE for services across all spaces
 - **Tool result submission** via SmartSpace and Run endpoints
-- **3-tier authentication**: gateway admin key, SmartSpace secret/public keys, JWT
+- **2-key authentication**: system-wide secret key + public key, JWT verification
 - **Membership enforcement** on all space-scoped operations
 - **Anti-impersonation**: JWT users' entityId auto-resolved from token
 
@@ -1096,4 +1083,4 @@ The gateway uses composable Express middleware:
 
 ## Status
 
-- **Gateway core is complete.** SmartSpace-centric API, authentication, streaming, and agent triggering are all implemented. Next step is building the SDKs (Node.js, React, CLI).
+- **Gateway core is complete.** SmartSpace-centric API, 2-key system-wide authentication, streaming, and agent triggering are all implemented. Next step is building the SDKs (Node.js, React, CLI).

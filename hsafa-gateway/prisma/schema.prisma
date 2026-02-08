@@ -93,8 +93,6 @@ model SmartSpace {
   name        String?
   description String?
   isPrivate   Boolean  @default(false) @map("is_private")
-  publicKey   String   @unique @map("public_key")  // pk_... - identifies space, grants read access
-  secretKey   String   @unique @map("secret_key")  // sk_... - admin access, full control
   metadata    Json?    @db.JsonB
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
