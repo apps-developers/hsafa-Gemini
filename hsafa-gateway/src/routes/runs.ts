@@ -238,30 +238,35 @@ runsRouter.get('/:runId/stream', requireAuth(), async (req: Request, res: Respon
     const subscriber = redis.duplicate();
     const notifyChannel = `run:${runId}:notify`;
 
-    // Handle incoming pub/sub messages
+    subscriber.on('error', (err) => {
+      console.error(`[Run SSE ${runId}] Redis subscriber error:`, err.message);
+    });
+
     subscriber.on('message', async (channel: string) => {
       if (channel !== notifyChannel || !isActive) return;
 
-      // Read events after last seen ID
-      const newEvents = await redis.xread('STREAMS', streamKey, lastSeenId);
-      
-      if (newEvents && newEvents.length > 0) {
-        for (const [, messages] of newEvents) {
-          for (const [id, fields] of messages) {
-            if (!isActive) break;
+      try {
+        const newEvents = await redis.xread('STREAMS', streamKey, lastSeenId);
+        
+        if (newEvents && newEvents.length > 0) {
+          for (const [, messages] of newEvents) {
+            for (const [id, fields] of messages) {
+              if (!isActive) break;
 
-            const event = toSSEEvent(id, fields);
-            res.write(`id: ${id}\n`);
-            res.write(`event: hsafa\n`);
-            res.write(`data: ${JSON.stringify(event)}\n\n`);
+              const event = toSSEEvent(id, fields);
+              res.write(`id: ${id}\n`);
+              res.write(`event: hsafa\n`);
+              res.write(`data: ${JSON.stringify(event)}\n\n`);
 
-            lastSeenId = id;
+              lastSeenId = id;
+            }
           }
         }
+      } catch (err) {
+        console.error(`[Run SSE ${runId}] Error reading stream:`, err);
       }
     });
 
-    // Subscribe to the notification channel
     await subscriber.subscribe(notifyChannel);
 
     const keepAliveInterval = setInterval(() => {
@@ -275,8 +280,12 @@ runsRouter.get('/:runId/stream', requireAuth(), async (req: Request, res: Respon
     req.on('close', async () => {
       isActive = false;
       clearInterval(keepAliveInterval);
-      await subscriber.unsubscribe(notifyChannel);
-      await subscriber.quit();
+      try {
+        await subscriber.unsubscribe(notifyChannel);
+        await subscriber.quit();
+      } catch {
+        // ignore cleanup errors on disconnect
+      }
     });
 
   } catch (error) {

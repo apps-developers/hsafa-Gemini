@@ -45,29 +45,6 @@ export async function createEmitEvent(runId: string): Promise<{ emitEvent: EmitE
 }
 
 /**
- * Loads all messages from a run's event history.
- */
-export async function loadRunMessages(runId: string): Promise<unknown[]> {
-  const events = await prisma.runEvent.findMany({
-    where: {
-      runId,
-      type: { in: ['message.user', 'message.assistant', 'message.tool'] },
-    },
-    orderBy: { seq: 'asc' },
-  });
-
-  const messages: unknown[] = [];
-  for (const evt of events) {
-    const payload = evt.payload as Record<string, unknown>;
-    const message = payload?.message;
-    if (message && typeof message === 'object') {
-      messages.push(message);
-    }
-  }
-  return messages;
-}
-
-/**
  * Parses Redis Stream fields array into a map.
  * Redis returns fields as [k1, v1, k2, v2, ...], this converts to { k1: v1, k2: v2 }
  */

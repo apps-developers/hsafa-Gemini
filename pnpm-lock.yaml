@@ -181,6 +181,13 @@ importers:
         version: 5.9.3
 
   ui-sdk:
+    dependencies:
+      clsx:
+        specifier: ^2.1.1
+        version: 2.1.1
+      tailwind-merge:
+        specifier: ^3.4.0
+        version: 3.4.0
     devDependencies:
       '@assistant-ui/react':
         specifier: ^0.10.25

@@ -133,7 +133,8 @@ export function requireSecretKey() {
       next();
     } catch (error) {
       console.error('Secret key auth error:', error);
-      res.status(500).json({ error: 'Authentication failed' });
+      const detail = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: `Authentication failed: ${detail}` });
     }
   };
 }
@@ -210,7 +211,8 @@ export function requirePublicKeyJWT() {
       next();
     } catch (error) {
       console.error('Public key + JWT auth error:', error);
-      res.status(500).json({ error: 'Authentication failed' });
+      const detail = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: `Authentication failed: ${detail}` });
     }
   };
 }

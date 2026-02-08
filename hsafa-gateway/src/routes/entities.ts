@@ -242,34 +242,42 @@ entitiesRouter.get('/:entityId/stream', requireSecretKey(), async (req: Request,
       lastSeenIds[id] = Array.isArray(last) && last.length > 0 ? last[0][0] : '0-0';
     }
 
+    subscriber.on('error', (err) => {
+      console.error(`[Entity SSE ${entityId}] Redis subscriber error:`, err.message);
+    });
+
     subscriber.on('message', async (channel: string) => {
       if (!isActive) return;
 
-      // Extract spaceId from channel: smartSpace:<id>:notify
-      const parts = channel.split(':');
-      const spaceId = parts[1];
-      if (!spaceId || !spaceIdSet.has(spaceId)) return;
+      try {
+        // Extract spaceId from channel: smartSpace:<id>:notify
+        const parts = channel.split(':');
+        const spaceId = parts[1];
+        if (!spaceId || !spaceIdSet.has(spaceId)) return;
 
-      const streamKey = `smartSpace:${spaceId}:stream`;
-      const lastId = lastSeenIds[spaceId] || '0-0';
+        const streamKey = `smartSpace:${spaceId}:stream`;
+        const lastId = lastSeenIds[spaceId] || '0-0';
 
-      const newEvents = await redis.xread('STREAMS', streamKey, lastId);
-      if (newEvents && newEvents.length > 0) {
-        for (const [, messages] of newEvents) {
-          for (const [id, fields] of messages) {
-            if (!isActive) break;
+        const newEvents = await redis.xread('STREAMS', streamKey, lastId);
+        if (newEvents && newEvents.length > 0) {
+          for (const [, messages] of newEvents) {
+            for (const [id, fields] of messages) {
+              if (!isActive) break;
 
-            const event = toSSEEvent(id, fields);
-            // Include smartSpaceId in the event for routing
-            const enriched = { ...event, smartSpaceId: spaceId };
+              const event = toSSEEvent(id, fields);
+              // Include smartSpaceId in the event for routing
+              const enriched = { ...event, smartSpaceId: spaceId };
 
-            res.write(`id: ${spaceId}:${id}\n`);
-            res.write(`event: hsafa\n`);
-            res.write(`data: ${JSON.stringify(enriched)}\n\n`);
+              res.write(`id: ${spaceId}:${id}\n`);
+              res.write(`event: hsafa\n`);
+              res.write(`data: ${JSON.stringify(enriched)}\n\n`);
 
-            lastSeenIds[spaceId] = id;
+              lastSeenIds[spaceId] = id;
+            }
           }
         }
+      } catch (err) {
+        console.error(`[Entity SSE ${entityId}] Error reading stream:`, err);
       }
     });
 
@@ -288,10 +296,14 @@ entitiesRouter.get('/:entityId/stream', requireSecretKey(), async (req: Request,
     req.on('close', async () => {
       isActive = false;
       clearInterval(keepAliveInterval);
-      for (const ch of channels) {
-        await subscriber.unsubscribe(ch);
+      try {
+        for (const ch of channels) {
+          await subscriber.unsubscribe(ch);
+        }
+        await subscriber.quit();
+      } catch {
+        // ignore cleanup errors on disconnect
       }
-      await subscriber.quit();
     });
   } catch (error) {
     console.error('[GET /api/entities/:entityId/stream] Error:', error);

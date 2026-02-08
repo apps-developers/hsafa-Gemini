@@ -37,6 +37,7 @@ export async function executeRun(runId: string): Promise<void> {
       triggeredById: true,
       status: true,
       startedAt: true,
+      metadata: true,
     },
   });
 
@@ -125,14 +126,6 @@ export async function executeRun(runId: string): Promise<void> {
         : null,
     ]);
 
-    // Build entity lookup for tagging messages
-    const entityMap = new Map<string, { displayName: string | null; type: string }>();
-    for (const m of messages) {
-      if (m.entityId && m.entity) {
-        entityMap.set(m.entityId, m.entity);
-      }
-    }
-
     // Build run context system message
     const contextParts: string[] = [];
 
@@ -151,6 +144,8 @@ export async function executeRun(runId: string): Promise<void> {
         .join(', ');
       contextParts.push(`Members of this space: ${memberList}.`);
     }
+
+    contextParts.push('Messages from other participants are prefixed with [Name] for identification. Do NOT prefix your own responses with your name or any tag.');
 
     // Tag messages with sender identity
     // - user/system messages: always tagged
@@ -315,7 +310,7 @@ export async function executeRun(runId: string): Promise<void> {
     const assistantMessage = {
       id: messageId,
       role: 'assistant',
-      parts: finalParts.length > 0 ? finalParts : [{ type: 'text', text: finalText }],
+      parts: finalParts.length > 0 ? finalParts : [{ type: 'text', text: finalText ?? '' }],
     };
 
     const dbMessage = await createSmartSpaceMessage({
@@ -345,12 +340,7 @@ export async function executeRun(runId: string): Promise<void> {
     await emitEvent('run.completed', { status: 'completed', text: finalText });
 
     // Trigger other agents in the SmartSpace (agent message triggers other agents)
-    // Get triggerDepth from run metadata for loop protection
-    const runMetadata = await prisma.run.findUnique({
-      where: { id: runId },
-      select: { metadata: true },
-    });
-    const triggerDepth = (runMetadata?.metadata as any)?.triggerDepth ?? 0;
+    const triggerDepth = (run.metadata as any)?.triggerDepth ?? 0;
     
     await triggerAgentsInSmartSpace({
       smartSpaceId: run.smartSpaceId,

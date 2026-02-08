@@ -1,8 +1,19 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import { Server } from 'http';
+import { Server, IncomingMessage } from 'http';
+import { jwtVerify } from 'jose';
 import { redis } from './redis.js';
 import { prisma } from './db.js';
 import { submitToolResult } from './tool-results.js';
+
+const HSAFA_SECRET_KEY = process.env.HSAFA_SECRET_KEY;
+const HSAFA_PUBLIC_KEY = process.env.HSAFA_PUBLIC_KEY;
+const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_ENTITY_CLAIM = process.env.JWT_ENTITY_CLAIM || 'sub';
+
+interface WsAuthContext {
+  method: 'secret_key' | 'public_key_jwt';
+  entityId?: string;
+}
 
 interface ClientConnection {
   ws: WebSocket;
@@ -11,13 +22,65 @@ interface ClientConnection {
 
 const clientConnections = new Map<string, ClientConnection>();
 
+/**
+ * Authenticate a WebSocket upgrade request via query params.
+ * Supports:
+ *   ?secretKey=sk_...
+ *   ?publicKey=pk_...&token=<jwt>
+ */
+async function authenticateWsRequest(req: IncomingMessage): Promise<WsAuthContext | null> {
+  const url = new URL(req.url || '', `http://${req.headers.host}`);
+  const secretKey = url.searchParams.get('secretKey');
+  const publicKey = url.searchParams.get('publicKey');
+  const token = url.searchParams.get('token');
+
+  // Secret key auth
+  if (secretKey) {
+    if (!HSAFA_SECRET_KEY || secretKey !== HSAFA_SECRET_KEY) return null;
+    return { method: 'secret_key' };
+  }
+
+  // Public key + JWT auth
+  if (publicKey && token) {
+    if (!HSAFA_PUBLIC_KEY || publicKey !== HSAFA_PUBLIC_KEY) return null;
+    if (!JWT_SECRET) return null;
+
+    try {
+      const secret = new TextEncoder().encode(JWT_SECRET);
+      const { payload } = await jwtVerify(token, secret);
+      const externalId = typeof payload[JWT_ENTITY_CLAIM] === 'string' ? payload[JWT_ENTITY_CLAIM] : null;
+      if (!externalId) return null;
+
+      const entity = await prisma.entity.findUnique({
+        where: { externalId },
+        select: { id: true },
+      });
+      if (!entity) return null;
+
+      return { method: 'public_key_jwt', entityId: entity.id };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
 export function setupWebSocketServer(server: Server) {
   const wss = new WebSocketServer({ 
     server,
     path: '/api/clients/connect'
   });
 
-  wss.on('connection', async (ws: WebSocket) => {
+  wss.on('connection', async (ws: WebSocket, req: IncomingMessage) => {
+    // Authenticate the connection
+    const auth = await authenticateWsRequest(req);
+    if (!auth) {
+      ws.send(JSON.stringify({ type: 'error', error: 'Authentication required. Pass secretKey or publicKey+token as query params.' }));
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+
     let clientConnection: ClientConnection | null = null;
 
     ws.on('message', async (data: Buffer) => {
@@ -26,7 +89,13 @@ export function setupWebSocketServer(server: Server) {
 
         switch (message.type) {
           case 'client.register': {
-            const { entityId, clientKey, clientType, displayName, capabilities } = message.data ?? {};
+            const { entityId: bodyEntityId, clientKey, clientType, displayName, capabilities } = message.data ?? {};
+
+            // For JWT auth: force entityId from token (prevent impersonation)
+            // For secret key auth: use entityId from message
+            const entityId = auth.method === 'public_key_jwt'
+              ? auth.entityId
+              : bodyEntityId;
 
             if (!entityId || typeof entityId !== 'string') {
               ws.send(JSON.stringify({ type: 'error', error: 'Missing required field: entityId' }));

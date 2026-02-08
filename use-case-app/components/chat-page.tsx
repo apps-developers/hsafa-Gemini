@@ -6,6 +6,10 @@ import {
   PanelLeftIcon,
   LogOutIcon,
   MessageSquareIcon,
+  UserPlusIcon,
+  XIcon,
+  LoaderIcon,
+  CheckIcon,
 } from "lucide-react";
 import { HsafaProvider, useHsafaClient, type SmartSpace } from "@hsafa/react-sdk";
 import { HsafaChatProvider } from "@hsafa/ui";
@@ -57,6 +61,40 @@ function ChatPageInner({
     window.history.replaceState({}, "", url.toString());
   }, [selectedSpaceId]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteResult, setInviteResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const handleInvite = useCallback(async () => {
+    if (!inviteEmail.trim() || !selectedSpaceId) return;
+    setInviteLoading(true);
+    setInviteResult(null);
+    try {
+      const res = await fetch("/api/spaces/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({
+          smartSpaceId: selectedSpaceId,
+          email: inviteEmail.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setInviteResult({ ok: false, message: data.error || "Failed to invite" });
+      } else {
+        setInviteResult({ ok: true, message: `Invited ${data.member.name}` });
+        setInviteEmail("");
+      }
+    } catch (err) {
+      setInviteResult({ ok: false, message: "Network error" });
+    } finally {
+      setInviteLoading(false);
+    }
+  }, [inviteEmail, selectedSpaceId, session.token]);
   const [spaces, setSpaces] = useState([
     {
       id: session.user.smartSpaceId,
@@ -70,7 +108,9 @@ function ChatPageInner({
       if (smartSpaces && smartSpaces.length > 0) {
         setSpaces(smartSpaces.map((s: any) => ({ id: s.id, name: s.name || "Untitled" })));
       }
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error("Failed to list spaces (auth or network issue?):", err);
+    });
   }, [client]);
 
   const handleSwitchSpace = useCallback((spaceId: string) => {
@@ -98,15 +138,25 @@ function ChatPageInner({
 
       const { smartSpace } = await res.json();
 
-      setSpaces((prev) => [
-        ...prev,
-        { id: smartSpace.id, name: smartSpace.name || "Untitled" },
-      ]);
       setSelectedSpaceId(smartSpace.id);
+
+      // Re-fetch full spaces list from gateway to stay in sync
+      client.spaces.list().then(({ smartSpaces }) => {
+        if (smartSpaces && smartSpaces.length > 0) {
+          setSpaces(smartSpaces.map((s: any) => ({ id: s.id, name: s.name || "Untitled" })));
+        }
+      }).catch((err) => {
+        console.error("Failed to refresh spaces list:", err);
+        // Fallback: append locally
+        setSpaces((prev) => [
+          ...prev,
+          { id: smartSpace.id, name: smartSpace.name || "Untitled" },
+        ]);
+      });
     } catch (err) {
       console.error("Failed to create new space:", err);
     }
-  }, [session.token]);
+  }, [client, session.token]);
 
   return (
     <HsafaChatProvider
@@ -179,6 +229,61 @@ function ChatPageInner({
             <span className="flex-1 text-sm font-medium text-muted-foreground">
               AI Assistant
             </span>
+
+            {/* Invite user to current space */}
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setShowInvite(!showInvite);
+                  setInviteResult(null);
+                }}
+                className="size-9"
+                title="Invite user to this space"
+              >
+                <UserPlusIcon className="size-4" />
+              </Button>
+              {showInvite && (
+                <div className="absolute right-0 top-full mt-2 z-50 w-72 rounded-lg border border-border bg-card p-3 shadow-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-medium text-foreground">Invite to space</span>
+                    <button onClick={() => setShowInvite(false)} className="text-muted-foreground hover:text-foreground">
+                      <XIcon className="size-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleInvite()}
+                      placeholder="user@example.com"
+                      className="flex-1 h-8 rounded-md border border-input bg-background px-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={handleInvite}
+                      disabled={inviteLoading || !inviteEmail.trim()}
+                      className="h-8 px-2.5"
+                    >
+                      {inviteLoading ? <LoaderIcon className="size-3 animate-spin" /> : "Invite"}
+                    </Button>
+                  </div>
+                  {inviteResult && (
+                    <div className={cn(
+                      "mt-2 flex items-center gap-1.5 rounded-md px-2 py-1 text-xs",
+                      inviteResult.ok
+                        ? "bg-green-500/10 text-green-600 dark:text-green-400"
+                        : "bg-destructive/10 text-destructive"
+                    )}>
+                      {inviteResult.ok ? <CheckIcon className="size-3" /> : null}
+                      {inviteResult.message}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <ThemeToggle />
 

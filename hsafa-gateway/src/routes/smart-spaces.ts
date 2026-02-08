@@ -392,10 +392,6 @@ smartSpacesRouter.get('/:smartSpaceId/stream', requireAuth(), requireMembership(
 
   let isActive = true;
 
-  req.on('close', () => {
-    isActive = false;
-  });
-
   try {
     res.write(`: Connected to smart space ${smartSpaceId}\n\n`);
 
@@ -431,30 +427,38 @@ smartSpacesRouter.get('/:smartSpaceId/stream', requireAuth(), requireMembership(
 
     const subscriber = redis.duplicate();
 
+    subscriber.on('error', (err) => {
+      console.error(`[SmartSpace SSE ${smartSpaceId}] Redis subscriber error:`, err.message);
+    });
+
     subscriber.on('message', async (channel: string) => {
       if (channel !== notifyChannel || !isActive) return;
 
-      const newEvents = await redis.xread('STREAMS', streamKey, lastSeenId);
-      if (newEvents && newEvents.length > 0) {
-        for (const [, messages] of newEvents) {
-          for (const [id, fields] of messages) {
-            if (!isActive) break;
+      try {
+        const newEvents = await redis.xread('STREAMS', streamKey, lastSeenId);
+        if (newEvents && newEvents.length > 0) {
+          for (const [, messages] of newEvents) {
+            for (const [id, fields] of messages) {
+              if (!isActive) break;
 
-            const event = toSSEEvent(id, fields);
-            const payload = event.data as any;
-            const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
-            if (afterSeq != null && seq != null && seq <= afterSeq) {
+              const event = toSSEEvent(id, fields);
+              const payload = event.data as any;
+              const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+              if (afterSeq != null && seq != null && seq <= afterSeq) {
+                lastSeenId = id;
+                continue;
+              }
+
+              res.write(`id: ${id}\n`);
+              res.write(`event: hsafa\n`);
+              res.write(`data: ${JSON.stringify(event)}\n\n`);
+
               lastSeenId = id;
-              continue;
             }
-
-            res.write(`id: ${id}\n`);
-            res.write(`event: hsafa\n`);
-            res.write(`data: ${JSON.stringify(event)}\n\n`);
-
-            lastSeenId = id;
           }
         }
+      } catch (err) {
+        console.error(`[SmartSpace SSE ${smartSpaceId}] Error reading stream:`, err);
       }
     });
 
@@ -471,8 +475,12 @@ smartSpacesRouter.get('/:smartSpaceId/stream', requireAuth(), requireMembership(
     req.on('close', async () => {
       isActive = false;
       clearInterval(keepAliveInterval);
-      await subscriber.unsubscribe(notifyChannel);
-      await subscriber.quit();
+      try {
+        await subscriber.unsubscribe(notifyChannel);
+        await subscriber.quit();
+      } catch {
+        // ignore cleanup errors on disconnect
+      }
     });
   } catch (error) {
     console.error('[GET /api/smart-spaces/:smartSpaceId/stream] Error:', error);
