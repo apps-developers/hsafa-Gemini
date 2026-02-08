@@ -95,18 +95,30 @@ export interface UseHsafaRuntimeReturn {
 // Helper: Convert SmartSpaceMessage → ThreadMessageLike
 // =============================================================================
 
-function convertMessage(msg: SmartSpaceMessage): ThreadMessageLike | null {
+function convertMessage(msg: SmartSpaceMessage, currentEntityId?: string): ThreadMessageLike | null {
   if (msg.role === 'tool') return null;
 
   const text = msg.content || '';
   if (!text.trim()) return null;
 
+  // Determine the display role:
+  // - Current user's messages → 'user' (right-aligned)
+  // - Other humans' messages → 'assistant' with isOtherHuman flag (left-aligned)
+  // - Agent/assistant messages → 'assistant'
+  let role: 'user' | 'assistant' = msg.role === 'user' ? 'user' : 'assistant';
+  let isOtherHuman = false;
+
+  if (msg.role === 'user' && currentEntityId && msg.entityId && msg.entityId !== currentEntityId) {
+    role = 'assistant';
+    isOtherHuman = true;
+  }
+
   return {
     id: msg.id,
-    role: msg.role === 'user' ? 'user' : 'assistant',
+    role,
     content: [{ type: 'text', text }],
     createdAt: new Date(msg.createdAt),
-    metadata: { custom: { entityId: msg.entityId || undefined } },
+    metadata: { custom: { entityId: msg.entityId || undefined, isOtherHuman } },
   };
 }
 
@@ -385,7 +397,7 @@ export function useHsafaRuntime(options: UseHsafaRuntimeOptions): UseHsafaRuntim
 
   const messages = useMemo<ThreadMessageLike[]>(() => {
     const persisted = rawMessages
-      .map(convertMessage)
+      .map((m) => convertMessage(m, entityId))
       .filter((m): m is ThreadMessageLike => m !== null);
 
     const streaming = streamingMessages

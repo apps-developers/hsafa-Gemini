@@ -4,7 +4,9 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  useMessage,
 } from "@assistant-ui/react";
+import { useMembers } from "@hsafa/ui";
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { type ReactNode } from "react";
 
@@ -111,9 +113,17 @@ function TextWithCaret({
 }
 
 function UserMessage() {
+  const { membersById, currentEntityId } = useMembers();
+  const entityId = useMessage((m) => (m.metadata as any)?.custom?.entityId as string | undefined);
+  const member = entityId ? membersById[entityId] : undefined;
+  const displayName = member?.displayName || "You";
+
   return (
-    <MessagePrimitive.Root className="flex justify-end py-2" data-role="user">
-      <div className="max-w-[85%] rounded-2xl bg-muted px-3 py-2 text-sm">
+    <MessagePrimitive.Root className="flex flex-col items-end py-2" data-role="user">
+      <span className="mb-1 mr-1 text-xs font-medium text-muted-foreground">
+        {displayName}
+      </span>
+      <div className="max-w-[85%] rounded-2xl bg-primary text-primary-foreground px-3 py-2 text-sm">
         <MessagePrimitive.Content />
       </div>
     </MessagePrimitive.Root>
@@ -121,9 +131,27 @@ function UserMessage() {
 }
 
 function AssistantMessage() {
+  const { membersById } = useMembers();
+  const entityId = useMessage((m) => (m.metadata as any)?.custom?.entityId as string | undefined);
+  const isOtherHuman = useMessage((m) => (m.metadata as any)?.custom?.isOtherHuman === true);
+  const member = entityId ? membersById[entityId] : undefined;
+  const displayName = member?.displayName || (isOtherHuman ? "User" : "AI Assistant");
+
   return (
     <MessagePrimitive.Root className="py-2" data-role="assistant">
-      <div className="text-sm">
+      <div className="flex items-center gap-2 mb-1">
+        <div
+          className={`flex size-6 items-center justify-center rounded-full text-[10px] font-semibold text-white ${
+            isOtherHuman ? "bg-blue-500" : "bg-emerald-600"
+          }`}
+        >
+          {displayName.charAt(0).toUpperCase()}
+        </div>
+        <span className="text-xs font-medium text-muted-foreground">
+          {displayName}
+        </span>
+      </div>
+      <div className="text-sm pl-8">
         <MessagePrimitive.Parts
           components={{
             Text: TextWithCaret,
