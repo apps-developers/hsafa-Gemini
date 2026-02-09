@@ -1,5 +1,4 @@
 import express from 'express';
-import cors from 'cors';
 import { createServer } from 'http';
 import { agentsRouter } from './routes/agents.js';
 import { entitiesRouter } from './routes/entities.js';
@@ -14,20 +13,20 @@ const app = express();
 const server = createServer(app);
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'x-public-key',
-    'x-secret-key',
-    'x-request-id',
-    'Cache-Control',
-  ],
-  exposedHeaders: ['Content-Type', 'Cache-Control', 'Connection', 'X-Accel-Buffering'],
-  credentials: false,
-}));
+// Force CORS on every response — runs before everything else
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-public-key, x-secret-key, x-request-id, Cache-Control');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Type, Cache-Control, Connection, X-Accel-Buffering');
+  res.setHeader('Access-Control-Max-Age', '86400');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
 app.use(express.json());
 
 app.use('/api/agents', agentsRouter);
