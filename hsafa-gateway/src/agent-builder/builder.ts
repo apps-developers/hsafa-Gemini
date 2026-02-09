@@ -61,10 +61,10 @@ export async function buildAgent(options: BuildAgentOptions): Promise<BuildAgent
     // Resolve static tools from agent config
     const staticTools = resolveTools(configTools, options.runContext);
 
-    // Auto-inject prebuilt tools (skip goToSpace for child goToSpace runs to prevent loops)
+    // Auto-inject prebuilt tools
     const prebuiltTools: Record<string, any> = {};
     for (const [action, handler] of getAllPrebuiltHandlers()) {
-      if (action === 'goToSpace' && options.runContext?.isGoToSpaceRun) continue;
+      // goToSpace is now allowed in child runs too (chaining: A → B → C)
       prebuiltTools[action] = tool({
         description: handler.defaultDescription,
         inputSchema: jsonSchema(handler.inputSchema as Parameters<typeof jsonSchema>[0]),

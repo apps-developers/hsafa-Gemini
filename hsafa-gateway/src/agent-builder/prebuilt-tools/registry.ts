@@ -18,7 +18,6 @@ export async function initPrebuiltTools(): Promise<void> {
   if (_initPromise) return _initPromise;
   _initPromise = (async () => {
     await import('./set-goals.js');
-    await import('./get-goals.js');
     await import('./delete-goals.js');
     await import('./get-memories.js');
     await import('./set-memories.js');

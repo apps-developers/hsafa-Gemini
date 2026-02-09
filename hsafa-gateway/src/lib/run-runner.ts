@@ -106,7 +106,7 @@ export async function executeRun(runId: string): Promise<void> {
     });
 
     // Load space members + triggering entity + agent display name for run context
-    const [spaceMembers, smartSpace, triggeredByEntity, agentEntity] = await Promise.all([
+    const [spaceMembers, smartSpace, triggeredByEntity, agentEntity, agentGoals, agentMemberships] = await Promise.all([
       prisma.smartSpaceMembership.findMany({
         where: { smartSpaceId: run.smartSpaceId },
         include: { entity: { select: { id: true, displayName: true, type: true, metadata: true } } },
@@ -125,9 +125,69 @@ export async function executeRun(runId: string): Promise<void> {
         where: { id: run.agentEntityId },
         select: { displayName: true },
       }),
+      prisma.goal.findMany({
+        where: { entityId: run.agentEntityId, isCompleted: false },
+        orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+      }),
+      prisma.smartSpaceMembership.findMany({
+        where: { entityId: run.agentEntityId },
+        include: {
+          smartSpace: {
+            select: {
+              id: true,
+              name: true,
+              memberships: {
+                include: { entity: { select: { displayName: true, type: true, metadata: true } } },
+              },
+            },
+          },
+        },
+      }),
     ]);
 
     const agentDisplayName = agentEntity?.displayName || 'AI Assistant';
+
+    // Format spaces list block for system prompt injection
+    const formatSpacesBlock = (): string[] => {
+      if (agentMemberships.length <= 1) return [];
+      const lines: string[] = [
+        '',
+        'You are a member of the following spaces. You can use goToSpace to go to any of them:',
+      ];
+      for (const membership of agentMemberships) {
+        const sp = membership.smartSpace;
+        const isCurrent = sp.id === run.smartSpaceId;
+        const members = sp.memberships
+          .map((m) => {
+            const name = m.entity.displayName || 'Unknown';
+            const meta = m.entity.metadata as Record<string, unknown> | null;
+            const metaStr = meta && Object.keys(meta).length > 0
+              ? ` [${Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ')}]`
+              : '';
+            return `${name} (${m.entity.type})${metaStr}`;
+          })
+          .join(', ');
+        lines.push(`- "${sp.name || sp.id}" (id: ${sp.id})${isCurrent ? ' [CURRENT]' : ''} — Members: ${members}`);
+      }
+      return lines;
+    };
+
+    // Format goals block for system prompt injection
+    const formatGoalsBlock = (): string[] => {
+      if (agentGoals.length === 0) return [];
+      const lines: string[] = [
+        '',
+        'Your current goals (highest priority first):',
+      ];
+      for (const g of agentGoals) {
+        const tags: string[] = [];
+        if (g.isLongTerm) tags.push('long-term');
+        if (g.priority > 0) tags.push(`priority: ${g.priority}`);
+        const suffix = tags.length > 0 ? ` (${tags.join(', ')})` : '';
+        lines.push(`- ${g.description}${suffix}`);
+      }
+      return lines;
+    };
 
     // ──────────────────────────────────────────────────────────────────────
     // goToSpace child runs: v3 Clean Execution Model
@@ -266,6 +326,9 @@ export async function executeRun(runId: string): Promise<void> {
       systemParts.push('');
       systemParts.push(`Your next response will be posted as a new message in "${smartSpace?.name || run.smartSpaceId}", visible to all participants.`);
 
+      systemParts.push(...formatGoalsBlock());
+      systemParts.push(...formatSpacesBlock());
+
       const goToSystemPrompt = systemParts.join('\n');
 
       // v3: Only system prompt + "Go ahead." — no real conversation turns
@@ -317,41 +380,9 @@ export async function executeRun(runId: string): Promise<void> {
 
       contextParts.push('Messages from other participants are prefixed with [Name] for identification. Do NOT prefix your own responses with your name or any tag.');
 
-      // Inject available spaces so the agent always knows where it can goToSpace
-      const agentMemberships = await prisma.smartSpaceMembership.findMany({
-        where: { entityId: run.agentEntityId },
-        include: {
-          smartSpace: {
-            select: {
-              id: true,
-              name: true,
-              memberships: {
-                include: { entity: { select: { displayName: true, type: true, metadata: true } } },
-              },
-            },
-          },
-        },
-      });
+      contextParts.push(...formatGoalsBlock());
 
-      if (agentMemberships.length > 1) {
-        contextParts.push('');
-        contextParts.push('You are a member of the following spaces. You can use goToSpace to go to any of them:');
-        for (const membership of agentMemberships) {
-          const sp = membership.smartSpace;
-          const isCurrent = sp.id === run.smartSpaceId;
-          const members = sp.memberships
-            .map((m) => {
-              const name = m.entity.displayName || 'Unknown';
-              const meta = m.entity.metadata as Record<string, unknown> | null;
-              const metaStr = meta && Object.keys(meta).length > 0
-                ? ` [${Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ')}]`
-                : '';
-              return `${name} (${m.entity.type})${metaStr}`;
-            })
-            .join(', ');
-          contextParts.push(`- "${sp.name || sp.id}" (id: ${sp.id})${isCurrent ? ' [CURRENT]' : ''} — Members: ${members}`);
-        }
-      }
+      contextParts.push(...formatSpacesBlock());
 
       // Tag messages with sender identity
       // - user/system messages: always tagged
