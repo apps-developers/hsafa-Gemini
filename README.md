@@ -8,6 +8,8 @@ It is a runtime for long-lived AI operators that can collaborate, migrate betwee
 
 **A world-changer:** the foundation for an AI workforce layer that most modern systems will eventually rely on.
 
+*The name **Hsafa** is inspired by the Arabic word **حصافة**, meaning intelligence and wisdom.*
+
 > A new category of system:  
 > **from conversational assistants → to autonomous digital workers.**
 
