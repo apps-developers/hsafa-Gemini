@@ -105,26 +105,11 @@ export async function executeRun(runId: string): Promise<void> {
       },
     });
 
-    // Load messages WITH entity info so we can tag sender identity
-    const messages = await prisma.smartSpaceMessage.findMany({
-      where: { smartSpaceId: run.smartSpaceId },
-      orderBy: { seq: 'asc' },
-      take: 50,
-      select: {
-        id: true,
-        role: true,
-        content: true,
-        metadata: true,
-        entityId: true,
-        entity: { select: { displayName: true, type: true } },
-      },
-    });
-
-    // Load space members + triggering entity for run context
-    const [spaceMembers, smartSpace, triggeredByEntity] = await Promise.all([
+    // Load space members + triggering entity + agent display name for run context
+    const [spaceMembers, smartSpace, triggeredByEntity, agentEntity] = await Promise.all([
       prisma.smartSpaceMembership.findMany({
         where: { smartSpaceId: run.smartSpaceId },
-        include: { entity: { select: { id: true, displayName: true, type: true } } },
+        include: { entity: { select: { id: true, displayName: true, type: true, metadata: true } } },
       }),
       prisma.smartSpace.findUnique({
         where: { id: run.smartSpaceId },
@@ -136,84 +121,276 @@ export async function executeRun(runId: string): Promise<void> {
             select: { displayName: true, type: true },
           })
         : null,
+      prisma.entity.findUnique({
+        where: { id: run.agentEntityId },
+        select: { displayName: true },
+      }),
     ]);
 
-    // Build run context system message
-    const contextParts: string[] = [];
+    const agentDisplayName = agentEntity?.displayName || 'AI Assistant';
 
-    if (smartSpace?.name) {
-      contextParts.push(`You are operating in SmartSpace "${smartSpace.name}".`);
-    }
+    // ──────────────────────────────────────────────────────────────────────
+    // goToSpace child runs: v3 Clean Execution Model
+    // - System prompt with origin + target context (no real conversation turns)
+    // - Single user message: "Go ahead."
+    // ──────────────────────────────────────────────────────────────────────
+    let modelMessages;
 
-    if (triggeredByEntity) {
-      const name = triggeredByEntity.displayName || 'Unknown';
-      contextParts.push(`This run was triggered by a message from ${name} (${triggeredByEntity.type}).`);
-    }
-
-    if (spaceMembers.length > 0) {
-      const memberList = spaceMembers
-        .map((m) => `${m.entity.displayName || 'Unknown'} (${m.entity.type})`)
-        .join(', ');
-      contextParts.push(`Members of this space: ${memberList}.`);
-    }
-
-    contextParts.push('Messages from other participants are prefixed with [Name] for identification. Do NOT prefix your own responses with your name or any tag.');
-
-    // goToSpace child runs: tell the agent it must carry out the task
     if (isGoToSpaceRun) {
-      contextParts.push('You have a task to carry out in this space. Read the latest message and do exactly what it says. Do not suggest or advise — act on it yourself. Respond directly to the participants here.');
-    }
+      const meta = run.metadata as any;
+      const instruction = meta?.instruction || '';
+      const originSmartSpaceId = meta?.originSmartSpaceId;
+      const originSmartSpaceName = meta?.originSmartSpaceName || originSmartSpaceId;
 
-    // Tag messages with sender identity
-    // - user/system messages: always tagged
-    // - assistant messages from OTHER agents: tagged so this agent can tell them apart
-    // - assistant messages from THIS agent: not tagged (the agent knows those are its own)
-    const taggedUiMessages = messages.map((m) => {
-      const base = toUiMessageFromSmartSpaceMessage(m);
-      const isOwnMessage = m.entityId === run.agentEntityId;
-      const shouldTag =
-        (m.role === 'user' || m.role === 'system' || (m.role === 'assistant' && !isOwnMessage))
-        && m.entity?.displayName;
+      // Load origin space context: members + recent messages
+      const [originMembers, originMessages] = await Promise.all([
+        originSmartSpaceId
+          ? prisma.smartSpaceMembership.findMany({
+              where: { smartSpaceId: originSmartSpaceId },
+              include: { entity: { select: { id: true, displayName: true, type: true, metadata: true } } },
+            })
+          : [],
+        originSmartSpaceId
+          ? prisma.smartSpaceMessage.findMany({
+              where: { smartSpaceId: originSmartSpaceId },
+              orderBy: { seq: 'desc' },
+              take: 10,
+              select: {
+                role: true,
+                content: true,
+                entityId: true,
+                entity: { select: { displayName: true, type: true } },
+              },
+            }).then((msgs) => msgs.reverse())
+          : [],
+      ]);
 
-      if (shouldTag) {
-        const senderTag = `[${m.entity!.displayName}]`;
-        if (Array.isArray(base.parts)) {
-          const parts = base.parts.map((p: any, i: number) => {
-            if (i === 0 && p.type === 'text' && typeof p.text === 'string') {
-              return { ...p, text: `${senderTag} ${p.text}` };
-            }
-            return p;
-          });
-          return { ...base, parts };
+      // Load target space recent messages (for context in system prompt)
+      const targetMessages = await prisma.smartSpaceMessage.findMany({
+        where: { smartSpaceId: run.smartSpaceId },
+        orderBy: { seq: 'desc' },
+        take: 15,
+        select: {
+          role: true,
+          content: true,
+          entityId: true,
+          entity: { select: { displayName: true, type: true } },
+        },
+      }).then((msgs) => msgs.reverse());
+
+      // Format messages as "Name: text" for system prompt
+      const formatMsgLine = (m: { content: string | null; entityId: string; entity: { displayName: string | null; type: string } | null }) => {
+        const name = m.entityId === run.agentEntityId
+          ? agentDisplayName
+          : (m.entity?.displayName || 'Unknown');
+        return `${name}: ${m.content || '(empty)'}`;
+      };
+
+      // Build the v3 isolated system prompt
+      const systemParts: string[] = [];
+
+      systemParts.push(`You are ${agentDisplayName}.`);
+      systemParts.push('');
+      systemParts.push(
+        'You are a single entity that operates across multiple spaces. You move between ' +
+        'spaces to talk to people, just like a person walks between rooms. You are NOT ' +
+        'a message relay, NOT a notification system, and NOT executing a dispatched task. ' +
+        'You are simply continuing your own natural flow of conversation.'
+      );
+
+      // Origin context
+      systemParts.push('');
+      systemParts.push('======================================================================');
+      systemParts.push('WHERE YOU JUST WERE');
+      systemParts.push('======================================================================');
+      systemParts.push('');
+      systemParts.push(`You were just in a space called "${originSmartSpaceName}".`);
+
+      if (originMembers.length > 0) {
+        systemParts.push('');
+        systemParts.push('Participants in that space:');
+        for (const m of originMembers) {
+          systemParts.push(`- ${m.entity.displayName || 'Unknown'} (${m.entity.type})`);
         }
       }
-      return base;
-    });
 
-    const aiSdkUiMessages = toAiSdkUiMessages(taggedUiMessages as any);
+      if (originMessages.length > 0) {
+        systemParts.push('');
+        systemParts.push('Here is what was said there recently (most recent last):');
+        for (const m of originMessages) {
+          systemParts.push(formatMsgLine(m));
+        }
+      }
 
-    // Prepend run context as a system message if we have context
-    if (contextParts.length > 0) {
-      aiSdkUiMessages.unshift({
-        role: 'system',
-        parts: [{ type: 'text', text: contextParts.join('\n') }],
+      // Target context
+      systemParts.push('');
+      systemParts.push('======================================================================');
+      systemParts.push('WHERE YOU ARE NOW');
+      systemParts.push('======================================================================');
+      systemParts.push('');
+      systemParts.push(`You are now in a space called "${smartSpace?.name || run.smartSpaceId}".`);
+
+      if (spaceMembers.length > 0) {
+        systemParts.push('');
+        systemParts.push('Participants in this space:');
+        for (const m of spaceMembers) {
+          systemParts.push(`- ${m.entity.displayName || 'Unknown'} (${m.entity.type})`);
+        }
+      }
+
+      if (targetMessages.length > 0) {
+        systemParts.push('');
+        systemParts.push('Here is the recent conversation in this space (most recent last):');
+        for (const m of targetMessages) {
+          systemParts.push(formatMsgLine(m));
+        }
+      }
+
+      // Task (placed last for maximum model attention)
+      systemParts.push('');
+      systemParts.push('======================================================================');
+      systemParts.push('WHAT TO DO');
+      systemParts.push('======================================================================');
+      systemParts.push('');
+      systemParts.push(`Based on your conversation in "${originSmartSpaceName}", you need to:`);
+      systemParts.push('');
+      systemParts.push(instruction);
+      systemParts.push('');
+      systemParts.push('RULES:');
+      systemParts.push('- Address the people in THIS space directly. You are talking TO them, not ABOUT them.');
+      systemParts.push(`- Speak naturally as yourself. You remember being in "${originSmartSpaceName}" — use that context to speak with full understanding, not like you're reading from a script.`);
+      systemParts.push('- Do NOT say things like "I was asked to tell you" or "I have a message for you" or "Just a heads up." You are not delivering a message. You are talking to people you know, about something you know, because you were part of the original conversation.');
+      systemParts.push('- Do NOT narrate what you are doing. Do not say "I am here to inform you" or "I am passing along information." Just say what needs to be said.');
+      systemParts.push('- If the task requires action (e.g., scheduling, creating something), do it yourself using your available tools. Do not suggest that someone else do it.');
+      systemParts.push(`- If you need to reference what was said in "${originSmartSpaceName}", do it naturally, for example "Husam mentioned..." — not "I received a task from ${originSmartSpaceName}."`);
+      systemParts.push('');
+      systemParts.push(`Your next response will be posted as a new message in "${smartSpace?.name || run.smartSpaceId}", visible to all participants.`);
+
+      const goToSystemPrompt = systemParts.join('\n');
+
+      // v3: Only system prompt + "Go ahead." — no real conversation turns
+      const aiSdkUiMessages = [
+        { role: 'system' as const, parts: [{ type: 'text' as const, text: goToSystemPrompt }] },
+        { role: 'user' as const, parts: [{ type: 'text' as const, text: 'Go ahead.' }] },
+      ];
+
+      modelMessages = await convertToModelMessages(aiSdkUiMessages as any);
+
+    } else {
+      // ──────────────────────────────────────────────────────────────────────
+      // Normal run: load conversation history as real turns
+      // ──────────────────────────────────────────────────────────────────────
+
+      // Load messages WITH entity info so we can tag sender identity
+      const messages = await prisma.smartSpaceMessage.findMany({
+        where: { smartSpaceId: run.smartSpaceId },
+        orderBy: { seq: 'asc' },
+        take: 50,
+        select: {
+          id: true,
+          role: true,
+          content: true,
+          metadata: true,
+          entityId: true,
+          entity: { select: { displayName: true, type: true } },
+        },
       });
-    }
 
-    // goToSpace child runs: append the instruction as a synthetic user message.
-    // This is in-memory only (never persisted to DB) so the agent responds to it
-    // naturally as the last message, without the real user ever seeing it.
-    if (isGoToSpaceRun) {
-      const goToInstruction = (run.metadata as any)?.instruction;
-      if (goToInstruction) {
-        aiSdkUiMessages.push({
-          role: 'user',
-          parts: [{ type: 'text', text: `[Task] ${goToInstruction}\n\nCarry out this task now. Respond directly to the people in this space.` }],
+      // Build run context system message
+      const contextParts: string[] = [];
+
+      if (smartSpace?.name) {
+        contextParts.push(`You are operating in SmartSpace "${smartSpace.name}".`);
+      }
+
+      if (triggeredByEntity) {
+        const name = triggeredByEntity.displayName || 'Unknown';
+        contextParts.push(`This run was triggered by a message from ${name} (${triggeredByEntity.type}).`);
+      }
+
+      if (spaceMembers.length > 0) {
+        const memberList = spaceMembers
+          .map((m) => `${m.entity.displayName || 'Unknown'} (${m.entity.type})`)
+          .join(', ');
+        contextParts.push(`Members of this space: ${memberList}.`);
+      }
+
+      contextParts.push('Messages from other participants are prefixed with [Name] for identification. Do NOT prefix your own responses with your name or any tag.');
+
+      // Inject available spaces so the agent always knows where it can goToSpace
+      const agentMemberships = await prisma.smartSpaceMembership.findMany({
+        where: { entityId: run.agentEntityId },
+        include: {
+          smartSpace: {
+            select: {
+              id: true,
+              name: true,
+              memberships: {
+                include: { entity: { select: { displayName: true, type: true, metadata: true } } },
+              },
+            },
+          },
+        },
+      });
+
+      if (agentMemberships.length > 1) {
+        contextParts.push('');
+        contextParts.push('You are a member of the following spaces. You can use goToSpace to go to any of them:');
+        for (const membership of agentMemberships) {
+          const sp = membership.smartSpace;
+          const isCurrent = sp.id === run.smartSpaceId;
+          const members = sp.memberships
+            .map((m) => {
+              const name = m.entity.displayName || 'Unknown';
+              const meta = m.entity.metadata as Record<string, unknown> | null;
+              const metaStr = meta && Object.keys(meta).length > 0
+                ? ` [${Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(', ')}]`
+                : '';
+              return `${name} (${m.entity.type})${metaStr}`;
+            })
+            .join(', ');
+          contextParts.push(`- "${sp.name || sp.id}" (id: ${sp.id})${isCurrent ? ' [CURRENT]' : ''} — Members: ${members}`);
+        }
+      }
+
+      // Tag messages with sender identity
+      // - user/system messages: always tagged
+      // - assistant messages from OTHER agents: tagged so this agent can tell them apart
+      // - assistant messages from THIS agent: not tagged (the agent knows those are its own)
+      const taggedUiMessages = messages.map((m) => {
+        const base = toUiMessageFromSmartSpaceMessage(m);
+        const isOwnMessage = m.entityId === run.agentEntityId;
+        const shouldTag =
+          (m.role === 'user' || m.role === 'system' || (m.role === 'assistant' && !isOwnMessage))
+          && m.entity?.displayName;
+
+        if (shouldTag) {
+          const senderTag = `[${m.entity!.displayName}]`;
+          if (Array.isArray(base.parts)) {
+            const parts = base.parts.map((p: any, i: number) => {
+              if (i === 0 && p.type === 'text' && typeof p.text === 'string') {
+                return { ...p, text: `${senderTag} ${p.text}` };
+              }
+              return p;
+            });
+            return { ...base, parts };
+          }
+        }
+        return base;
+      });
+
+      const aiSdkUiMessages = toAiSdkUiMessages(taggedUiMessages as any);
+
+      // Prepend run context as a system message if we have context
+      if (contextParts.length > 0) {
+        aiSdkUiMessages.unshift({
+          role: 'system',
+          parts: [{ type: 'text', text: contextParts.join('\n') }],
         });
       }
-    }
 
-    const modelMessages = await convertToModelMessages(aiSdkUiMessages as any);
+      modelMessages = await convertToModelMessages(aiSdkUiMessages as any);
+    }
 
     const streamResult = await built.agent.stream({ messages: modelMessages });
 

@@ -8,17 +8,17 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 registerPrebuiltTool('goToSpace', {
   defaultDescription:
-    'Go to a SmartSpace and carry out a task there. ' +
-    'A new run will start in that space and your response will appear as a regular message. ' +
+    'Go to another SmartSpace and carry out a task there. ' +
+    'Your response will appear as a regular message in that space. ' +
     'This returns immediately — you will not see the result. ' +
-    'Call getSpaces first to find space IDs.',
+    'The available spaces and their IDs are listed in your system prompt.',
 
   inputSchema: {
     type: 'object',
     properties: {
       smartSpaceId: {
         type: 'string',
-        description: 'UUID of the target SmartSpace. Use getSpaces to look up IDs.',
+        description: 'UUID of the target SmartSpace (from your system prompt).',
       },
       instruction: {
         type: 'string',
@@ -33,7 +33,7 @@ registerPrebuiltTool('goToSpace', {
     const { agentEntityId, agentId, runId: parentRunId, smartSpaceId: originSmartSpaceId } = context;
 
     if (!UUID_RE.test(smartSpaceId)) {
-      return { success: false, error: `"${smartSpaceId}" is not a valid UUID. Use getSpaces to find space IDs.` };
+      return { success: false, error: `"${smartSpaceId}" is not a valid UUID. Check the space IDs in your system prompt.` };
     }
 
     if (smartSpaceId === originSmartSpaceId) {
@@ -59,8 +59,8 @@ registerPrebuiltTool('goToSpace', {
     }
 
     // Create child run with instruction in metadata.
-    // run-runner will inject the instruction as a synthetic user message (in-memory only,
-    // not persisted) so the agent responds to it naturally without confusing the real user.
+    // run-runner uses the v3 clean execution model: isolated system prompt with
+    // origin + target context, single "Go ahead." user message (no real conversation turns).
     const run = await prisma.run.create({
       data: {
         smartSpaceId,
